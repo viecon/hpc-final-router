@@ -1,0 +1,10 @@
+router,benchmark,status,seconds,evaluator,total_wirelength,total_overflow,max_overflow,overflowed_nets,overflowed_edges,output
+nthu_original,adaptec1.capo70.3d.35.50.90,ok,398.602398,lab2-verifier.py,5363235,0,0,0,0,/home/u3961564/hpc-final-router/results/nthu_original/adaptec1.capo70.3d.35.50.90.nthu.out
+nthu_openmp,adaptec1.capo70.3d.35.50.90,ok,396.221632,lab2-verifier.py,5362564,0,0,0,0,/home/u3961564/hpc-final-router/results/nthu_openmp/adaptec1.capo70.3d.35.50.90.nthu.out
+nctu,adaptec1.capo70.3d.35.50.90,ok,94.287288,lab2-verifier.py,5444473,0,0,0,0,/home/u3961564/hpc-final-router/results/nctu/adaptec1.capo70.3d.35.50.90.nctu.out
+nthu_original,adaptec2.mpl60.3d.35.20.100,ok,160.380428,lab2-verifier.py,4857976,958172,2,187019,479086,/home/u3961564/hpc-final-router/results/nthu_original/adaptec2.mpl60.3d.35.20.100.nthu.out
+nthu_openmp,adaptec2.mpl60.3d.35.20.100,ok,159.388201,lab2-verifier.py,4858513,958110,2,186905,479055,/home/u3961564/hpc-final-router/results/nthu_openmp/adaptec2.mpl60.3d.35.20.100.nthu.out
+nctu,adaptec2.mpl60.3d.35.20.100,ok,36.602325,lab2-verifier.py,5268055,0,0,0,0,/home/u3961564/hpc-final-router/results/nctu/adaptec2.mpl60.3d.35.20.100.nctu.out
+nthu_original,adaptec3.dragon70.3d.30.50.90,ok,422.956177,lab2-verifier.py,13158101,0,0,0,0,/home/u3961564/hpc-final-router/results/nthu_original/adaptec3.dragon70.3d.30.50.90.nthu.out
+nthu_openmp,adaptec3.dragon70.3d.30.50.90,ok,417.260015,lab2-verifier.py,13157672,0,0,0,0,/home/u3961564/hpc-final-router/results/nthu_openmp/adaptec3.dragon70.3d.30.50.90.nthu.out
+nctu,adaptec3.dragon70.3d.30.50.90,ok,143.430401,lab2-verifier.py,13111623,0,0,0,0,/home/u3961564/hpc-final-router/results/nctu/adaptec3.dragon70.3d.30.50.90.nctu.out

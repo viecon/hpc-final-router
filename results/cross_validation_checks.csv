@@ -1,0 +1,10 @@
+check,source,router,benchmark,status,seconds,expected_seconds,total_overflow,expected_overflow,output_exists,result
+adaptec1 original,results/real_baselines_adaptec123_summary.csv,nthu_original,adaptec1.capo70.3d.35.50.90,ok,398.602398,398.602398,0,0,True,PASS
+adaptec2 original,results/real_baselines_adaptec123_summary.csv,nthu_original,adaptec2.mpl60.3d.35.20.100,ok,160.380428,160.380428,958172,958172,True,PASS
+adaptec3 original,results/real_baselines_adaptec123_summary.csv,nthu_original,adaptec3.dragon70.3d.30.50.90,ok,422.956177,422.956177,0,0,True,PASS
+best A1 NTHU legal,results/nthu_a1_p2max6_p3box_narrow2_summary.csv,nthu_a1_th1800_p2max6_p3box66_122,adaptec1.capo70.3d.35.50.90,ok,188.156013,188.156013,0,0,True,PASS
+best A2 NTHU legal,results/nthu_p2_adaptec2_threshold2_summary.csv,nthu_p2_box5_5_th240,adaptec2.mpl60.3d.35.20.100,ok,81.880970,81.880970,0,0,True,PASS
+best A3 NTHU legal,results/nthu_cuda_a3_p2max_p3box_sweep_summary.csv,nthu_cuda_a3_step8_p2max4_box35_50,adaptec3.dragon70.3d.30.50.90,ok,152.142108,152.142108,0,0,True,PASS
+B1 NTHU original legal,results/nthu_bigblue1_self_probe_summary.csv,nthu_b1_original,bigblue1.capo60.3d.50.10.100,ok,873.105913,873.105913,0,0,True,PASS
+B1 NTHU fastest time frontier,results/nthu_b1_second_p3_selector_probe_summary.csv,nthu_b1_late4_p3box54_88_p3m2_edgecount_limit80,bigblue1.capo60.3d.50.10.100,ok,172.430727,172.430727,3882,3882,True,PASS
+B1 NCTU tuned legal,results/nctu_wl50_p2m2_maze20_greedy_bigblue_summary.csv,nctu,bigblue1.capo60.3d.50.10.100,ok,168.417282,168.417282,0,0,True,PASS

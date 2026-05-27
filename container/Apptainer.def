@@ -1,0 +1,36 @@
+Bootstrap: docker
+From: nvidia/cuda:11.8.0-devel-ubuntu22.04
+
+%labels
+    Author HPC Final Router
+    Description Reproducible CPU/GPU benchmark environment for collision-aware maze routing
+
+%post
+    set -eux
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        bzip2 \
+        git \
+        gzip \
+        libboost-all-dev \
+        ninja-build \
+        perl \
+        python3 \
+        python3-pip \
+        time \
+        unzip \
+        wget \
+        zlib1g-dev
+    python3 -m pip install --no-cache-dir pandas matplotlib
+    rm -rf /var/lib/apt/lists/*
+
+%environment
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+
+%runscript
+    exec "$@"

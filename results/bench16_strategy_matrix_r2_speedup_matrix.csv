@@ -1,0 +1,17 @@
+benchmark,Original,OpenMP t4,Fast layer,P2/P3 budget,CUDA score,Edge-count post
+adaptec1.capo70.3d.35.50.90,1.000x,1.003x,1.415x,2.125x,1.581x *,3.187x *
+adaptec2.mpl60.3d.35.20.100,1.000x,1.049x,1.886x,0.424x *,0.373x *,3.932x *
+adaptec3.dragon70.3d.30.50.90,1.000x,1.021x,1.238x,1.415x,2.759x,2.161x *
+adaptec4.aplace60.3d.30.50.90,1.000x,1.013x,1.240x,1.368x,1.482x *,1.589x
+adaptec5.mfar50.3d.50.20.100,1.000x,1.008x,1.578x,2.198x *,0.768x *,4.331x *
+bigblue1.capo60.3d.50.10.100,1.000x,1.007x,1.598x,2.163x *,1.433x *,4.976x *
+bigblue2.mpl60.3d.40.60.60,1.000x,1.012x *,1.555x *,0.944x *,1.735x *,6.839x *
+bigblue3.aplace70.3d.50.10.90.m8,1.000x,1.047x *,1.497x *,timeout,0.481x *,6.430x *
+bigblue4.fastplace70.3d.80.20.80,timeout,timeout,timeout,timeout,"done, no baseline","done, no baseline"
+newblue1.ntup50.3d.30.50.90,1.000x,1.040x *,1.792x *,0.673x *,1.896x *,21.300x *
+newblue2.fastplace90.3d.50.20.100,1.000x,1.019x,1.363x,1.528x,1.701x,1.611x
+newblue3.kraftwerk80.3d.40.50.90,timeout,timeout,timeout,timeout,"done, no baseline","done, no baseline"
+newblue4.mpl50.3d.40.10.95,timeout,timeout,"done, no baseline",timeout,"done, no baseline","done, no baseline"
+newblue5.ntup50.3d.40.10.100,1.000x,1.051x *,1.631x *,timeout,timeout,5.147x *
+newblue6.mfar80.3d.60.10.100,timeout,timeout,"done, no baseline","done, no baseline",timeout,"done, no baseline"
+newblue7.kraftwerk70.3d.80.20.82.m8,timeout,timeout,timeout,timeout,timeout,"done, no baseline"

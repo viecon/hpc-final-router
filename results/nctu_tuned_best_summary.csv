@@ -1,0 +1,4 @@
+router,benchmark,status,seconds,evaluator,total_wirelength,total_overflow,max_overflow,overflowed_nets,overflowed_edges,output
+nctu_wl50_m20_greedy,adaptec1.capo70.3d.35.50.90,ok,80.624733,lab2-verifier.py,6057085,0,0,0,0,/home/u3961564/hpc-final-router/results/nctu_param_sweep_a1_wl50_m20_greedy/adaptec1.capo70.3d.35.50.90.nctu.out
+nctu_wl50_m20_greedy,adaptec2.mpl60.3d.35.20.100,ok,23.097999,lab2-verifier.py,5739823,0,0,0,0,/home/u3961564/hpc-final-router/results/nctu_param_sweep_a2_wl50_m20_greedy/adaptec2.mpl60.3d.35.20.100.nctu.out
+nctu_wl20_p1m1_maze6_greedy,adaptec3.dragon70.3d.30.50.90,ok,89.827705,lab2-verifier.py,14598256,0,0,0,0,/home/u3961564/hpc-final-router/results/nctu_a3_greedy_maze_refine_wl20_p1m1_maze6_greedy/adaptec3.dragon70.3d.30.50.90.nctu.out

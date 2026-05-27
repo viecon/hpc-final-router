@@ -1,0 +1,36 @@
+build*/
+build-gpu/
+logs/
+*.sif
+*.out
+*.err
+__pycache__/
+benchmarks/
+backup/
+backups/
+
+# Keep raw experiment outputs out of git; selected summary CSVs below are small
+# and are part of the final report evidence.
+results/**
+!results/
+!results/README.md
+!results/bench16_strategy_catalog.csv
+!results/bench16_strategy_matrix_r2_summary.csv
+!results/bench16_strategy_matrix_r2_speedups.csv
+!results/bench16_strategy_matrix_r2_speedup_matrix.csv
+!results/method_speedups_summary.csv
+!results/cross_validation_checks.csv
+!results/real_baselines_summary.csv
+!results/real_baselines_adaptec123_summary.csv
+!results/nctu_tuned_best_summary.csv
+!results/nctu_tuned_best_r3_summary.csv
+
+external/nctu-gr/
+external/NCTU-GR-20130701.tar
+external/nthu-route/.git/
+external/nthu-route/.git.local-backup/
+external/nthu-route/build*/
+external/nthu-route/adaptec*.gr
+external/nthu-route-original/.git/
+external/nthu-route-original/build*/
+external/nthu-route-original/adaptec*.gr

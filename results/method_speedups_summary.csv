@@ -1,0 +1,17 @@
+category,method,benchmark_set,baseline_seconds,method_seconds,speedup,total_overflow,legality,source,note
+baseline,NTHU original baseline,adaptec1-3,981.939003,981.939003,1.000000,mixed: a2=958172,baseline; not all legal,results/real_baselines_adaptec123_summary.csv,source baseline for speedup; adaptec2 remains overflowed
+baseline,NCTU-GR default black-box,adaptec1-3,981.939003,274.320014,3.579538,0,legal,results/real_baselines_adaptec123_summary.csv,cross-router black-box baseline
+source_opt,OpenMP analysis kernels,adaptec1-3,981.939003,972.869848,1.009322,mixed: a2=958110,not all legal,results/real_baselines_adaptec123_summary.csv,parallel reductions/range setup; bottleneck stayed sequential reroute
+source_opt,Fast greedy layer assignment,adaptec1,398.602398,219.098877,1.819281,0,legal,results/nthu_fast_greedy_layer_a1_summary.csv,replace slower layer assignment with greedy assignment
+source_opt,Fast greedy layer + threshold,adaptec2,160.380428,85.781977,1.869628,0,legal,results/nthu_fast_greedy_layer_a2_conservative_summary.csv,conservative legal A2 fast-layer run
+source_opt,Fast greedy layer assignment,adaptec3,422.956177,204.051424,2.072792,0,legal,results/nthu_fast_greedy_layer_a3_summary.csv,large speedup but high wirelength
+source_opt,P2/P3 budget tuning,adaptec1,398.602398,188.156013,2.118467,0,legal,results/nthu_a1_p2max6_p3box_narrow2_summary.csv,best legal A1 NTHU row: p2max6 p3box66_122
+source_opt,P2 threshold tuning,adaptec2,160.380428,81.880970,1.958702,0,legal,results/nthu_p2_adaptec2_threshold2_summary.csv,best legal A2 NTHU row: th240
+source_opt,CUDA candidate scoring + P2/P3 tuning,adaptec3,422.956177,152.142108,2.780007,0,legal,results/nthu_cuda_a3_p2max_p3box_sweep_summary.csv,best legal A3 NTHU row: step8 p2max4 box35_50
+source_opt,Best legal NTHU combination,adaptec1-3,981.939003,422.179091,2.325883,0,legal,derived from legal rows above,fastest legal NTHU row per adaptec benchmark
+gpu_micro,Standalone CUDA dogleg scorer,adaptec1,9.041765,0.256353,35.271000,n/a,microbenchmark only,results/gpu_real_dogleg_candidate_summary.csv,"candidate scoring only, not end-to-end router"
+gpu_micro,Standalone CUDA dogleg scorer,adaptec2,4.074685,0.107030,38.071000,n/a,microbenchmark only,results/gpu_real_dogleg_candidate_summary.csv,"candidate scoring only, not end-to-end router"
+gpu_micro,Standalone CUDA dogleg scorer,adaptec3,10.465150,0.309457,33.818000,n/a,microbenchmark only,results/gpu_real_dogleg_candidate_summary.csv,"candidate scoring only, not end-to-end router"
+frontier,B1 NTHU edge-count post-processing frontier,bigblue1,873.105913,172.430727,5.063517,3882,illegal,results/nthu_b1_second_p3_selector_probe_summary.csv,meets time target but fails overflow target
+cross_router,B1 NCTU tuned legal,bigblue1,873.105913,168.417282,5.184182,0,legal; cross-router,results/nctu_wl50_p2m2_maze20_greedy_bigblue_summary.csv,"useful black-box comparison, not NTHU source speedup"
+cross_router,NCTU-GR tuned legal best-per-benchmark,adaptec1-3,981.939003,193.550437,5.073298,0,legal; cross-router,results/all_summaries_catalog.csv,fastest legal NCTU row per adaptec benchmark

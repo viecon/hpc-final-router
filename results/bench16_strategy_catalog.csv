@@ -1,0 +1,10 @@
+strategy,category,retest_16,description
+nthu_original,baseline,yes,Unmodified NTHU execution path with compatibility fixes; used as per-benchmark speedup denominator.
+nthu_openmp_t4,algorithm_implementation,yes,OpenMP-enabled analysis kernels and counters at 4 threads.
+nthu_fast_layer,algorithm_optimization,yes,Fast greedy layer assignment enabled by NTHU_FAST_GREEDY_LAYER.
+nthu_p2p3_budget,algorithm_optimization,yes,P2/P3 routing-effort budget and box-size tuning plus fast greedy layer assignment.
+nthu_cuda_score,algorithm_gpu,yes,CUDA-assisted costed maze/candidate scoring plus P2/P3 tuning and fast layer assignment.
+nthu_edgecount_post,algorithm_optimization,yes,Post-processing edge-count candidate sorting plus late reroute score gating; originally found on BigBlue1 and now retested across all 16 for generality.
+nctu_default,cross_router_baseline,no,NCTU-GR default black-box baseline; useful comparison but not NTHU algorithm improvement.
+nctu_tuned,cross_router_tuning,no,NCTU-GR tuned black-box parameter strategy; useful comparison but not NTHU source-code algorithm improvement.
+targeted_python_repairs,postprocess_experimental,no,External Python output repairs; excluded because runtime accounting and integration are not comparable to router-internal strategies.
