@@ -41,7 +41,7 @@ case "$STRATEGY" in
     ROUTER_LABEL="nthu_fast_layer"
     NTHU_OPENMP=OFF
     NTHU_CUDA=OFF
-    BUILD_DIR="$ROOT/external/nthu-route/build-release-openmp-OFF"
+    BUILD_DIR="${NTHU_CPU_BUILD_DIR:-$ROOT/external/nthu-route/build-release-openmp-OFF}"
     NTHU_EXTRA_ARGS="--p2-init-box-size=5 --p2-box-expand-size=5"
     ENV_ASSIGNMENTS=(NTHU_FAST_GREEDY_LAYER=1)
     ;;
@@ -108,7 +108,7 @@ case "$STRATEGY" in
     ROUTER_LABEL="nthu_edgecount_post"
     NTHU_OPENMP=OFF
     NTHU_CUDA=ON
-    BUILD_DIR="$ROOT/external/nthu-route/build-release-openmp-OFF-cuda-ON-post-hot-sort"
+    BUILD_DIR="${NTHU_CUDA_POST_BUILD_DIR:-$ROOT/external/nthu-route/build-release-openmp-OFF-cuda-ON-post-hot-sort}"
     NTHU_EXTRA_ARGS="--p2-init-box-size=5 --p2-box-expand-size=5 --overflow-threshold=10000 --p2-max-iteration=5 --p3-max-iteration=2 --p3-init-box-size=54 --p3-box-expand-size=88"
     ENV_ASSIGNMENTS=(
       NTHU_FAST_GREEDY_LAYER=1
