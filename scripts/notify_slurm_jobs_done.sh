@@ -10,6 +10,7 @@ NTFY_TOPIC=${NTFY_TOPIC:-hpc-final-router-viecon-20260602}
 NTFY_URL=${NTFY_URL:-https://ntfy.sh/${NTFY_TOPIC}}
 INTERVAL_SECONDS=${INTERVAL_SECONDS:-120}
 LOG=${LOG:-"$ROOT/logs/notify_jobs_done.log"}
+EMPTY_POLLS_TO_FINISH=${EMPTY_POLLS_TO_FINISH:-3}
 
 mkdir -p logs results/job_hooks
 
@@ -89,11 +90,19 @@ send_ntfy() {
 
 log "watching job_ids=$JOB_IDS tags=${AGG_TAGS:-none} ntfy_topic=$NTFY_TOPIC"
 
+empty_polls=0
 while true; do
   active=$(active_jobs)
   if [[ -z "$active" ]]; then
-    break
+    empty_polls=$((empty_polls + 1))
+    log "no active jobs visible (${empty_polls}/${EMPTY_POLLS_TO_FINISH})"
+    if (( empty_polls >= EMPTY_POLLS_TO_FINISH )); then
+      break
+    fi
+    sleep "$INTERVAL_SECONDS"
+    continue
   fi
+  empty_polls=0
   log "active jobs:"
   log "$active"
   sleep "$INTERVAL_SECONDS"
