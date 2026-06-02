@@ -60,7 +60,7 @@ submit_one() {
   safe_bench=${safe_bench//[^A-Za-z0-9_]/_}
   job_name="b16-${strategy}-${safe_bench}"
   job_name=${job_name:0:120}
-  job=$(
+  if ! job=$(
     sbatch --parsable \
       --account="$ACCOUNT" \
       --qos="$QOS" \
@@ -75,8 +75,12 @@ submit_one() {
       --output="$ROOT/logs/%x_%j.log" \
       --error="$ROOT/logs/%x_%j.err" \
       --export=ALL,PROJECT_ROOT="$ROOT",TAG="$TAG",EVALUATOR=lab2,OMP_NUM_THREADS="$CPUS",JOBS="$CPUS" \
-      --wrap="cd '$ROOT' && apptainer exec --nv router.sif bash scripts/run_bench16_strategy_one.sh '$strategy' '$bench'"
-  )
+      --wrap="cd '$ROOT' && apptainer exec --nv router.sif bash scripts/run_bench16_strategy_one.sh '$strategy' '$bench'" \
+      2>> "$LOG"
+  ); then
+    echo "[$(date '+%F %T')] sbatch failed line=$line_no strategy=$strategy bench=$bench" >> "$LOG"
+    return 1
+  fi
   if [[ -z "$job" ]]; then
     echo "[$(date '+%F %T')] sbatch returned empty job id line=$line_no strategy=$strategy bench=$bench" >> "$LOG"
     return 1
