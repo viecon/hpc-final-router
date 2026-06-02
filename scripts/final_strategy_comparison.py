@@ -14,6 +14,8 @@ SOURCES = [
     RESULTS / "bench16_strategy_matrix_r3_legal_repair_summary.csv",
     RESULTS / "bench16_strategy_matrix_r4_overflow_fix_summary.csv",
     RESULTS / "bench16_strategy_matrix_r4_output_repair_summary.csv",
+    RESULTS / "bench16_strategy_matrix_r5_best_illegal_summary.csv",
+    RESULTS / "bench16_strategy_matrix_r5_best_illegal_output_repair_summary.csv",
 ]
 
 OUT_ALL = RESULTS / "final_strategy_comparison_all_rows.csv"
