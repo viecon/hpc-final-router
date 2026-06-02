@@ -31,6 +31,7 @@ LOG="$OUT_DIR/${BENCH_STEM}.repair.log"
 PASSES=${PASSES:-16}
 MAX_NETS=${MAX_NETS:-32}
 RADIUS=${RADIUS:-16}
+MAX_OFFSET=${MAX_OFFSET:-2}
 
 mkdir -p "$OUT_DIR"
 echo "router,benchmark,status,seconds,evaluator,total_wirelength,total_overflow,max_overflow,overflowed_nets,overflowed_edges,output" > "$SUMMARY"
@@ -71,6 +72,17 @@ case "$REPAIR_KIND" in
       --work-prefix "$WORK_PREFIX" \
       --max-passes "$PASSES" \
       --max-nets-per-edge "$MAX_NETS" \
+      > "$LOG" 2>&1 || status=fail
+    ;;
+  local_detour_fast)
+    python3 scripts/targeted_local_detour_fast_repair.py \
+      --design "$DESIGN" \
+      --route "$INPUT_ROUTE" \
+      --out "$OUT_ROUTE" \
+      --work-prefix "$WORK_PREFIX" \
+      --max-passes "$PASSES" \
+      --max-nets-per-edge "$MAX_NETS" \
+      --max-offset "$MAX_OFFSET" \
       > "$LOG" 2>&1 || status=fail
     ;;
   *)
