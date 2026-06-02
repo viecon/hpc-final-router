@@ -37,6 +37,7 @@ SOURCES = [
     RESULTS / "bench16_strategy_matrix_r17_p2p3_neighbor_excess_repair_summary.csv",
     RESULTS / "bench16_strategy_matrix_r18_bigblue2_output_repair_summary.csv",
     RESULTS / "bench16_strategy_matrix_r19_newblue5_output_repair_summary.csv",
+    RESULTS / "bench16_strategy_matrix_r20_newblue5_internal_repair_summary.csv",
 ]
 
 OUT_ALL = RESULTS / "final_strategy_comparison_all_rows.csv"
