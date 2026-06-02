@@ -68,8 +68,8 @@ def format_seg(values):
 
 def grid_xy(design, gx, gy):
     return (
-        design["llx"] + gx * design["xsize"],
-        design["lly"] + gy * design["ysize"],
+        design["llx"] + gx * design["xsize"] + design["xsize"] // 2,
+        design["lly"] + gy * design["ysize"] + design["ysize"] // 2,
     )
 
 

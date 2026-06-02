@@ -55,6 +55,13 @@ def add_if_nonzero(out, values):
     out.append(split.format_seg(values))
 
 
+def center_xy(design, gx, gy):
+    return (
+        design["llx"] + gx * design["xsize"] + design["xsize"] // 2,
+        design["lly"] + gy * design["ysize"] + design["ysize"] // 2,
+    )
+
+
 def build_detour(design, seg, edge, offset, main_layer, side_layer):
     direction, x, y, old_layer = edge
     x1, y1, l1, x2, y2, l2 = split.parse_seg(seg)
@@ -65,9 +72,9 @@ def build_detour(design, seg, edge, offset, main_layer, side_layer):
     if direction == "H":
         if y + offset < 0 or y + offset >= design["gridy"]:
             return None
-        ax0, ay = split.grid_xy(design, x, y)
-        bx0, _ = split.grid_xy(design, x + 1, y)
-        _cx_unused, cy = split.grid_xy(design, x, y + offset)
+        ax0, ay = center_xy(design, x, y)
+        bx0, _ = center_xy(design, x + 1, y)
+        _cx_unused, cy = center_xy(design, x, y + offset)
         if x1g <= x2g:
             ax, bx = ax0, bx0
         else:
@@ -85,9 +92,9 @@ def build_detour(design, seg, edge, offset, main_layer, side_layer):
 
     if x + offset < 0 or x + offset >= design["gridx"]:
         return None
-    ax, ay0 = split.grid_xy(design, x, y)
-    _unused, by0 = split.grid_xy(design, x, y + 1)
-    cx, _cy_unused = split.grid_xy(design, x + offset, y)
+    ax, ay0 = center_xy(design, x, y)
+    _unused, by0 = center_xy(design, x, y + 1)
+    cx, _cy_unused = center_xy(design, x + offset, y)
     if y1g <= y2g:
         ay, by = ay0, by0
     else:
