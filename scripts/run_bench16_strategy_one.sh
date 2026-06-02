@@ -67,6 +67,17 @@ case "$STRATEGY" in
       NTHU_POST_SORT_MODE=edge_count
     )
     ;;
+  nthu_p2p3_ultra_repair)
+    ROUTER_LABEL="nthu_p2p3_ultra_repair"
+    NTHU_OPENMP=OFF
+    NTHU_CUDA=OFF
+    BUILD_DIR="$ROOT/external/nthu-route/build-release-openmp-OFF"
+    NTHU_EXTRA_ARGS="--p2-init-box-size=8 --p2-box-expand-size=8 --p2-max-iteration=18 --overflow-threshold=0 --p3-max-iteration=60 --p3-init-box-size=100 --p3-box-expand-size=180"
+    ENV_ASSIGNMENTS=(
+      NTHU_FAST_GREEDY_LAYER=1
+      NTHU_POST_SORT_MODE=edge_count
+    )
+    ;;
   nthu_p2p3_budget)
     ROUTER_LABEL="nthu_p2p3_budget"
     NTHU_OPENMP=OFF
