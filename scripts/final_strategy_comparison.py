@@ -32,6 +32,7 @@ SOURCES = [
     RESULTS / "bench16_strategy_matrix_r12_best_illegal_edge_split_center_repair_summary.csv",
     RESULTS / "bench16_strategy_matrix_r13_best_illegal_astar_center_wide_repair_summary.csv",
     RESULTS / "bench16_strategy_matrix_r14_p2p3_ultra_repair_summary.csv",
+    RESULTS / "bench16_strategy_matrix_r15_p2p3_excess_repair_summary.csv",
 ]
 
 OUT_ALL = RESULTS / "final_strategy_comparison_all_rows.csv"
