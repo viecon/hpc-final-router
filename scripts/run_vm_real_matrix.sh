@@ -14,6 +14,8 @@ GUARD_SUPPORTED="$RESULT_ROOT/overflow_guard_supported.csv"
 JOBS=${JOBS:-4}
 MAX_ROUTER_CORES=${MAX_ROUTER_CORES:-12}
 OPENMP_THREADS=${OPENMP_THREADS:-4}
+OPENMP_PROC_BIND=${OPENMP_PROC_BIND:-close}
+OPENMP_PLACES=${OPENMP_PLACES:-cores}
 if ! [[ "$MAX_ROUTER_CORES" =~ ^[0-9]+$ ]] || (( MAX_ROUTER_CORES < 1 )); then
   MAX_ROUTER_CORES=12
 fi
@@ -91,6 +93,8 @@ build_and_run() {
     BENCH_LIST="$BENCH_LIST" \
     EVALUATOR=lab2 \
     OMP_NUM_THREADS="$openmp_threads" \
+    OMP_PROC_BIND="$OPENMP_PROC_BIND" \
+    OMP_PLACES="$OPENMP_PLACES" \
     NTHU_OPENMP="$openmp" \
     NTHU_CUDA="$cuda" \
     JOBS="$JOBS" \
