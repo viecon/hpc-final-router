@@ -169,6 +169,49 @@ def main():
         writer.writeheader()
         writer.writerows(best_rows)
 
+    comparison_rows = [
+        {
+            "benchmark": row["benchmark"],
+            "original_strategy": "true_original",
+            "original_seconds": row["original_seconds"],
+            "original_overflow": row["original_overflow"],
+            "original_legal": row["original_legal"],
+            "post_fix_strategy": row["best_strategy"],
+            "post_fix_seconds": row["best_seconds"],
+            "speedup_vs_original": row["best_speedup"],
+            "post_fix_overflow": row["best_overflow"],
+            "post_fix_max_overflow": row["best_max_overflow"],
+            "post_fix_guard_pass": row["best_guard_pass"],
+            "fastest_any_strategy": row["fastest_any_strategy"],
+            "fastest_any_seconds": row["fastest_any_seconds"],
+            "fastest_any_speedup": row["fastest_any_speedup"],
+            "fastest_any_guard_pass": row["fastest_any_guard_pass"],
+        }
+        for row in best_rows
+    ]
+    comparison_path = result_root / "comparison_postfix_live.csv"
+    with comparison_path.open("w", newline="") as f:
+        fieldnames = [
+            "benchmark",
+            "original_strategy",
+            "original_seconds",
+            "original_overflow",
+            "original_legal",
+            "post_fix_strategy",
+            "post_fix_seconds",
+            "speedup_vs_original",
+            "post_fix_overflow",
+            "post_fix_max_overflow",
+            "post_fix_guard_pass",
+            "fastest_any_strategy",
+            "fastest_any_seconds",
+            "fastest_any_speedup",
+            "fastest_any_guard_pass",
+        ]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(comparison_rows)
+
     guard_path = result_root / "overflow_guard_live.csv"
     with guard_path.open("w", newline="") as f:
         fieldnames = [
@@ -185,9 +228,28 @@ def main():
         writer.writerows(guard_rows)
 
     guard_failures = sum(1 for row in guard_rows if not row["passes"])
+    report_path = result_root / "run_report_live.md"
+    with report_path.open("w", encoding="utf-8") as f:
+        f.write("# VM Real Benchmark Run\n\n")
+        f.write(f"- Result root: `{result_root}`\n")
+        f.write(f"- Rows: {len(rows)}\n")
+        f.write(f"- Best rows: {len(best_rows)}\n")
+        f.write(f"- Overflow guard failures: {guard_failures}\n")
+        f.write("- Environment: `environment.txt`\n")
+        f.write("- Strategy catalog: `strategy_catalog.csv`\n\n")
+        f.write("| Benchmark | Original s | Original overflow | Post-fix strategy | Post-fix s | Speedup | Post-fix overflow | Guard |\n")
+        f.write("| --- | ---: | ---: | --- | ---: | ---: | ---: | --- |\n")
+        for row in comparison_rows:
+            f.write(
+                "| {benchmark} | {original_seconds} | {original_overflow} | {post_fix_strategy} | "
+                "{post_fix_seconds} | {speedup_vs_original} | {post_fix_overflow} | {post_fix_guard_pass} |\n".format(**row)
+            )
+
     print(f"wrote {summary_path}")
     print(f"wrote {best_path}")
+    print(f"wrote {comparison_path}")
     print(f"wrote {guard_path}")
+    print(f"wrote {report_path}")
     print(f"rows={len(rows)} best_rows={len(best_rows)} guard_failures={guard_failures}")
 
 
