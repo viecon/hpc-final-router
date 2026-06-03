@@ -167,6 +167,9 @@ void Post_processing::initial_for_post_processing(int post_iteration) {
     const bool use_excess_edge_repair =
             post_excess_edge_repair_enabled() ||
             (post_iteration > 1 && post_excess_edge_repair_after_first_enabled());
+    const int broad_after_iter = env_int("NTHU_POST_EXCESS_EDGE_REPAIR_BROAD_AFTER_ITER", 0);
+    const bool broad_excess_edge_repair =
+            use_excess_edge_repair && broad_after_iter > 0 && post_iteration >= broad_after_iter;
     if (use_excess_edge_repair) {
         struct EdgeCandidate {
             int id;
@@ -211,6 +214,10 @@ void Post_processing::initial_for_post_processing(int post_iteration) {
         }
         log_sp->info("post excess edge repair: iteration={} overflow_edges={} entries={} selected={} mult={}",
                 post_iteration, edge_candidates.size(), excess_edge_entries, excess_edge_selected, mult);
+        if (broad_excess_edge_repair) {
+            log_sp->info("post excess edge repair broad mode: iteration={} broad_after_iter={} selected_filter_disabled=1",
+                    post_iteration, broad_after_iter);
+        }
     }
     const double excess_ms = profile_ms(excess_start, ProfileClock::now());
 
@@ -320,7 +327,7 @@ void Post_processing::initial_for_post_processing(int post_iteration) {
         Two_pin_element_2d& twopList = construct_2d_tree.two_pin_list[id];
         // call maze routing
         if (counter[i].total_overflow > 0) {
-            if (!excess_edge_candidate.empty() && !excess_edge_candidate[id]) {
+            if (!broad_excess_edge_repair && !excess_edge_candidate.empty() && !excess_edge_candidate[id]) {
                 continue;
             }
             if (post_overflow_limit > 0 && routed_overflow_candidates >= post_overflow_limit) {
