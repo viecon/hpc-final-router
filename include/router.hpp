@@ -77,6 +77,15 @@ Metrics route_cpu_dogleg_candidates(const Benchmark &benchmark, const RouterConf
 Metrics route_cuda_candidates(const Benchmark &benchmark, const RouterConfig &config);
 Metrics route_cuda_dogleg_candidates(const Benchmark &benchmark, const RouterConfig &config);
 
+namespace detail {
+
+Metrics legalize_and_collect_metrics(const std::string &mode, const Benchmark &benchmark,
+                                     const RouterConfig &config, std::vector<Path> &paths,
+                                     int completed_iterations,
+                                     double elapsed_before_legalization_ms);
+
+} // namespace detail
+
 std::string csv_header();
 std::string to_csv(const Metrics &metrics);
 

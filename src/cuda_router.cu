@@ -4,8 +4,6 @@
 #include <chrono>
 #include <cmath>
 #include <cuda_runtime.h>
-#include <numeric>
-#include <sstream>
 #include <stdexcept>
 #include <vector>
 
@@ -19,13 +17,6 @@ struct DeviceNets {
   int *ty = nullptr;
 };
 
-struct Demand {
-  std::vector<int> h;
-  std::vector<int> v;
-};
-
-int h_edges(const Grid &grid) { return grid.height * std::max(0, grid.width - 1); }
-int v_edges(const Grid &grid) { return std::max(0, grid.height - 1) * grid.width; }
 int h_index(const Grid &grid, int x0, int x1, int y) {
   return y * (grid.width - 1) + std::min(x0, x1);
 }
@@ -275,48 +266,6 @@ Path build_dogleg_path(const Grid &grid, const Net &net, uint8_t kind, int mid, 
   return path;
 }
 
-void add_path(Demand &demand, const Path &path) {
-  for (const auto &edge : path.edges) {
-    if (edge.dir == 0) {
-      ++demand.h[edge.index];
-    } else {
-      ++demand.v[edge.index];
-    }
-  }
-}
-
-Metrics collect(const Benchmark &benchmark, const RouterConfig &config,
-                const std::vector<Path> &paths, const Demand &demand,
-                double milliseconds) {
-  Metrics m;
-  m.mode = "cuda_candidate";
-  m.grid_width = benchmark.grid.width;
-  m.grid_height = benchmark.grid.height;
-  m.nets = static_cast<int>(benchmark.nets.size());
-  m.threads = config.threads;
-  m.iterations = 1;
-  m.milliseconds = milliseconds;
-  for (const auto &path : paths) {
-    if (path.routed) {
-      ++m.routed_nets;
-      m.wirelength += static_cast<long long>(path.edges.size());
-    } else {
-      ++m.failed_nets;
-    }
-  }
-  for (size_t i = 0; i < demand.h.size(); ++i) {
-    const long long of = std::max(0, demand.h[i] - benchmark.grid.h_capacity[i]);
-    m.overflow += of;
-    m.max_overflow = std::max(m.max_overflow, of);
-  }
-  for (size_t i = 0; i < demand.v.size(); ++i) {
-    const long long of = std::max(0, demand.v[i] - benchmark.grid.v_capacity[i]);
-    m.overflow += of;
-    m.max_overflow = std::max(m.max_overflow, of);
-  }
-  return m;
-}
-
 } // namespace
 
 Metrics route_cuda_candidates(const Benchmark &benchmark, const RouterConfig &config) {
@@ -379,14 +328,14 @@ Metrics route_cuda_candidates(const Benchmark &benchmark, const RouterConfig &co
   cudaFree(d_costs);
 
   std::vector<Path> paths(n);
-  Demand demand{std::vector<int>(h_edges(grid), 0), std::vector<int>(v_edges(grid), 0)};
   for (int i = 0; i < n; ++i) {
     paths[i] = build_candidate_path(grid, benchmark.nets[i], choice[i], costs[i]);
-    add_path(demand, paths[i]);
   }
-  const auto end = std::chrono::steady_clock::now();
-  const double ms = std::chrono::duration<double, std::milli>(end - start).count();
-  return collect(benchmark, config, paths, demand, ms);
+  const auto after_initial = std::chrono::steady_clock::now();
+  const double initial_ms =
+      std::chrono::duration<double, std::milli>(after_initial - start).count();
+  return detail::legalize_and_collect_metrics("cuda_candidate", benchmark, config, paths, 1,
+                                              initial_ms);
 }
 
 Metrics route_cuda_dogleg_candidates(const Benchmark &benchmark, const RouterConfig &config) {
@@ -457,16 +406,14 @@ Metrics route_cuda_dogleg_candidates(const Benchmark &benchmark, const RouterCon
   cudaFree(d_costs);
 
   std::vector<Path> paths(n);
-  Demand demand{std::vector<int>(h_edges(grid), 0), std::vector<int>(v_edges(grid), 0)};
   for (int i = 0; i < n; ++i) {
     paths[i] = build_dogleg_path(grid, benchmark.nets[i], choice_kind[i], choice_mid[i], costs[i]);
-    add_path(demand, paths[i]);
   }
-  const auto end = std::chrono::steady_clock::now();
-  const double ms = std::chrono::duration<double, std::milli>(end - start).count();
-  Metrics metrics = collect(benchmark, config, paths, demand, ms);
-  metrics.mode = "cuda_dogleg_candidate";
-  return metrics;
+  const auto after_initial = std::chrono::steady_clock::now();
+  const double initial_ms =
+      std::chrono::duration<double, std::milli>(after_initial - start).count();
+  return detail::legalize_and_collect_metrics("cuda_dogleg_candidate", benchmark, config, paths,
+                                              1, initial_ms);
 }
 
 } // namespace router
