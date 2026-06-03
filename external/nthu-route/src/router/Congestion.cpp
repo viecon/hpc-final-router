@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <string>
 #include <unordered_map>
@@ -28,6 +29,18 @@ namespace NTHUR {
 
 constexpr double parameter_h = 0.8;         // used in the edge cost function 1/0.5 0.8/2
 constexpr double parameter_k = 2;           // used in the edge cost function
+
+bool post_weighted_cost_enabled() {
+    return std::getenv("NTHU_POST_WEIGHTED_COST") != nullptr;
+}
+
+double post_weighted_cost_scale() {
+    const char* value = std::getenv("NTHU_POST_WEIGHTED_COST_SCALE");
+    if (value == nullptr || *value == '\0') {
+        return 4.0;
+    }
+    return std::max(0.0, std::atof(value));
+}
 }
 NTHUR::Congestion::Congestion(int x, int y) :
         congestionMap2d { x, y }  //
@@ -60,6 +73,12 @@ double Congestion::get_cost_2d(const Coordinate_2d& c1, const Coordinate_2d& c2,
         }
 
         case MADEOF_COST: {    //Used in part III: Post processing
+            if (post_weighted_cost_enabled()) {
+                const int overflow_after_insert = std::max(0, edge.cur_cap + 1 - edge.max_cap);
+                return overflow_after_insert > 0
+                        ? 1.0 + post_weighted_cost_scale() * overflow_after_insert
+                        : 0.0;
+            }
             return edge.isFull();
         }
 
