@@ -9,6 +9,7 @@ RUN_ID=${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
 RESULT_ROOT=${RESULT_ROOT:-"$ROOT/results/$TAG/runs/$RUN_ID"}
 RUN_INDEX=${RUN_INDEX:-"$ROOT/results/$TAG/index.csv"}
 RUN_NOTES=${RUN_NOTES:-}
+SOURCE_REF=${SOURCE_REF:-origin/vm-fastest-benchmark-guard}
 BENCH_LIST="$RESULT_ROOT/benchmarks.list"
 SUMMARY="$RESULT_ROOT/summary.csv"
 GUARD="$RESULT_ROOT/overflow_guard.csv"
@@ -103,6 +104,8 @@ write_environment() {
     echo "started_at=$STARTED_AT"
     echo "tag=$TAG"
     echo "result_root=$RESULT_ROOT"
+    echo "source_ref=$SOURCE_REF"
+    echo "source_commit=$(git rev-parse --short "$SOURCE_REF" 2>/dev/null || git rev-parse --short HEAD || true)"
     echo "bench_set=$BENCH_SET"
     echo "bench_count=${#BENCHES[@]}"
     echo "run_strategies=$RUN_STRATEGIES"
@@ -134,7 +137,11 @@ write_environment() {
     nvidia-smi || true
     echo
     echo "== tools =="
-    apptainer --version || true
+    if command -v apptainer >/dev/null 2>&1; then
+      apptainer --version || true
+    else
+      echo "apptainer=not_available_inside_container"
+    fi
     cmake --version || true
     ninja --version || true
   } > "$RESULT_ROOT/environment.txt"
@@ -484,6 +491,8 @@ STARTED_AT_VALUE="$STARTED_AT" \
 ENDED_AT_VALUE="$ENDED_AT" \
 TAG_VALUE="$TAG" \
 RESULT_ROOT_VALUE="$RESULT_ROOT" \
+SOURCE_REF_VALUE="$SOURCE_REF" \
+SOURCE_COMMIT_VALUE="$(git rev-parse --short "$SOURCE_REF" 2>/dev/null || git rev-parse --short HEAD || true)" \
 GIT_BRANCH_VALUE="$(git branch --show-current || true)" \
 GIT_HEAD_VALUE="$(git rev-parse --short HEAD || true)" \
 BENCH_SET_VALUE="$BENCH_SET" \
@@ -508,6 +517,8 @@ fieldnames = [
     "ended_at",
     "tag",
     "result_root",
+    "source_ref",
+    "source_commit",
     "git_branch",
     "git_head",
     "bench_set",
@@ -528,6 +539,8 @@ row = {
     "ended_at": os.environ["ENDED_AT_VALUE"],
     "tag": os.environ["TAG_VALUE"],
     "result_root": os.environ["RESULT_ROOT_VALUE"],
+    "source_ref": os.environ["SOURCE_REF_VALUE"],
+    "source_commit": os.environ["SOURCE_COMMIT_VALUE"],
     "git_branch": os.environ["GIT_BRANCH_VALUE"],
     "git_head": os.environ["GIT_HEAD_VALUE"],
     "bench_set": os.environ["BENCH_SET_VALUE"],
