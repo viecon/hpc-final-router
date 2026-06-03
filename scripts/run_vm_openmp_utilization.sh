@@ -130,7 +130,7 @@ PY
     status=ok
     (
       cd "$BUILD_DIR"
-      env \
+      exec env \
         OMP_NUM_THREADS="$threads" \
         OMP_PROC_BIND="$OPENMP_PROC_BIND" \
         OMP_PLACES="$OPENMP_PLACES" \
