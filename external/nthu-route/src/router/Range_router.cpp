@@ -237,6 +237,18 @@ bool range_sort_by_overflow_score_enabled() {
     return std::getenv("NTHU_RANGE_SORT_BY_OVERFLOW_SCORE") != nullptr;
 }
 
+bool post_accept_improvement_enabled() {
+    return std::getenv("NTHU_POST_ACCEPT_IMPROVEMENT") != nullptr;
+}
+
+int post_accept_min_delta() {
+    const char* value = std::getenv("NTHU_POST_ACCEPT_MIN_DELTA");
+    if (value == nullptr || *value == '\0') {
+        return 1;
+    }
+    return std::max(1, std::atoi(value));
+}
+
 int remainder_min_box_size() {
     const char* value = std::getenv("NTHU_RANGE_REMAINDER_MIN_BOX");
     if (value == nullptr || *value == '\0') {
@@ -254,6 +266,18 @@ int path_overflow_score(const NTHUR::Two_pin_element_2d& two_pin, const NTHUR::C
     for (int path_index = static_cast<int>(two_pin.path.size()) - 2; path_index >= 0; --path_index) {
         const NTHUR::Edge_2d& edge = congestion.congestionMap2d.edge(two_pin.path[path_index], two_pin.path[path_index + 1]);
         overflow_score += std::max(0, edge.overUsage());
+    }
+    return overflow_score;
+}
+
+int inserted_path_overflow_score(const std::vector<NTHUR::Coordinate_2d>& path,
+        int net_id,
+        const NTHUR::Congestion& congestion) {
+    int overflow_score = 0;
+    for (int path_index = static_cast<int>(path.size()) - 2; path_index >= 0; --path_index) {
+        const NTHUR::Edge_2d& edge = congestion.congestionMap2d.edge(path[path_index], path[path_index + 1]);
+        const int inc = edge.lookupNet(net_id) ? 0 : 1;
+        overflow_score += std::max(0, static_cast<int>(edge.cur_cap + inc - edge.max_cap));
     }
     return overflow_score;
 }
@@ -570,6 +594,7 @@ void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version) 
         const int score_until_iter = reroute_score_until_iter();
         const int late_score_after_iter = reroute_late_score_after_iter();
         const int late_min_reroute_score = reroute_late_min_overflow_score();
+        const bool require_post_improvement = version == 3 && post_accept_improvement_enabled();
         if (version == 2 && late_score_after_iter >= 0 && late_min_reroute_score > 0 &&
                 congestion.cur_iter > late_score_after_iter) {
             min_reroute_score = late_min_reroute_score;
@@ -582,7 +607,7 @@ void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version) 
                 (cuda_maze_fastpath_enabled() || cuda_costed_maze_fastpath_enabled()) &&
                 (!cuda_maze_post_only_enabled() || version == 3);
         if (dogleg_fastpath_enabled() || dump_candidates_enabled() || min_reroute_score > 1 ||
-                cuda_maze_enabled_this_phase) {
+                cuda_maze_enabled_this_phase || require_post_improvement) {
             for (int i = static_cast<int>(two_pin.path.size()) - 2; i >= 0; --i) {
                 const Edge_2d& edge = congestion.congestionMap2d.edge(two_pin.path[i], two_pin.path[i + 1]);
                 old_path_overflow_score += std::max(0, edge.overUsage());
@@ -599,6 +624,7 @@ void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version) 
 
         construct_2d_tree.NetDirtyBit[two_pin.net_id] = true;
 
+        const std::vector<Coordinate_2d> original_path(two_pin.path);
         congestion.update_congestion_map_remove_two_pin_net(two_pin.path, two_pin.net_id);
         if (do_profile) {
             auto after_remove = ProfileClock::now();
@@ -780,6 +806,16 @@ void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version) 
 
             if (!find_path_flag) {
                 two_pin.path.insert(two_pin.path.begin(), bound_path.begin(), bound_path.end());
+            }
+        }
+
+        if (find_path_flag && require_post_improvement) {
+            const int new_path_overflow_score =
+                    inserted_path_overflow_score(two_pin.path, two_pin.net_id, congestion);
+            if (new_path_overflow_score + post_accept_min_delta() > old_path_overflow_score) {
+                two_pin.path = original_path;
+                two_pin.pin1 = two_pin.path.front();
+                two_pin.pin2 = two_pin.path.back();
             }
         }
 
