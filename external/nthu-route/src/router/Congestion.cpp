@@ -74,10 +74,8 @@ double Congestion::get_cost_2d(const Coordinate_2d& c1, const Coordinate_2d& c2,
 
         case MADEOF_COST: {    //Used in part III: Post processing
             if (post_weighted_cost_enabled()) {
-                const double overflow_after_insert = std::max(0.0, edge.cur_cap + 1 - edge.max_cap);
-                return overflow_after_insert > 0
-                        ? 1.0 + post_weighted_cost_scale() * overflow_after_insert
-                        : 0.0;
+                const double current_overflow = std::max(0.0, edge.cur_cap - edge.max_cap);
+                return edge.isFull() ? 1.0 + post_weighted_cost_scale() * current_overflow : 0.0;
             }
             return edge.isFull();
         }
