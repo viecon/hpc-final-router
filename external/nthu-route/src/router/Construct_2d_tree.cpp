@@ -840,6 +840,16 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
     if (adaptive_legal_repair_enabled()) {
         int cur_overflow = congestion.cal_max_overflow();
         const int trigger = std::max(0, env_int("NTHU_ADAPTIVE_REPAIR_TRIGGER_OVERFLOW", 0));
+        const int post_only_limit = std::max(0, env_int("NTHU_ADAPTIVE_POST_ONLY_OVERFLOW_LIMIT", 0));
+        if (cur_overflow > trigger && post_only_limit > 0 && cur_overflow <= post_only_limit) {
+            log_sp->info("adaptive post-only repair enabled: overflow={} trigger={} limit={}",
+                    cur_overflow, trigger, post_only_limit);
+            output_2_pin_list();
+            post_processing.process(route_2pinnets);
+            cur_overflow = congestion.cal_max_overflow();
+            log_sp->info("adaptive post-only repair complete: overflow={} trigger={}",
+                    cur_overflow, trigger);
+        }
         if (cur_overflow > trigger) {
             const int adaptive_max_iter = std::max(routingparam.get_iteration_p2(),
                     env_int("NTHU_ADAPTIVE_REPAIR_P2_MAX_ITER", routingparam.get_iteration_p2()));

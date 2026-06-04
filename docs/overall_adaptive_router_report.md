@@ -59,6 +59,7 @@ Environment:
 NTHU_ADAPTIVE_LEGAL_REPAIR=1
 NTHU_ADAPTIVE_REPAIR_TRIGGER_OVERFLOW=0
 NTHU_ADAPTIVE_REPAIR_P2_MAX_ITER=10
+NTHU_ADAPTIVE_POST_ONLY_OVERFLOW_LIMIT=0
 ```
 
 Logic:
@@ -67,6 +68,9 @@ Logic:
 - If overflow is zero, stop.
 - If overflow remains, resume P2 repair from the actual completed P2 iteration.
 - This avoids the previous bug where the adaptive repair skipped P2 iteration 7.
+- New opt-in follow-up: when `NTHU_ADAPTIVE_POST_ONLY_OVERFLOW_LIMIT > 0` and
+  remaining overflow is at or below that limit, run the deeper repair P3 directly
+  before trying extra P2.  This is based only on measured routing overflow.
 
 ### Adaptive P3 Budget
 
