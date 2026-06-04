@@ -4,8 +4,10 @@
 #include <boost/heap/pairing_heap.hpp>
 #include <boost/heap/policies.hpp>
 #include <boost/multi_array.hpp>
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "../misc/geometry.h"
@@ -135,6 +137,8 @@ private:
     //Cache System
     void putNetOnColorMap();
     void bfsSetColorMap(const Coordinate_2d& c1);
+    std::uint64_t edge_visit_key(const Coordinate_2d& c1, const Coordinate_2d& c2) const;
+    bool edge_visited_on_color_map(const Coordinate_2d& c1, const Coordinate_2d& c2) const;
 
     bool smaller_than_lower_bound(double total_cost, int distance, int via_num, double bound_cost, int bound_distance, int bound_via_num);
 
@@ -144,6 +148,7 @@ private:
     boost::multi_array<MMM_element, 2> mmm_map;
 
     vector<vector<Vertex_mmm> > net_tree;
+    std::unordered_set<std::uint64_t> color_map_visited_edges;
     MMM_element::MMMPriortyQueue pqueue;
     Two_pin_element_2d *element;
     Vertex_mmm* pin1_v;

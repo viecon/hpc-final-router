@@ -3,10 +3,13 @@
 #include <boost/multi_array/base.hpp>
 #include <boost/multi_array/multi_array_ref.hpp>
 #include <sys/types.h>
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <stack>
+#include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "../flute/flute-ds.h"
@@ -217,6 +220,23 @@ void Multisource_multisink_mazeroute::setup_pqueue() {
     find_subtree(*pin2_v, 1);	//destination
 }
 
+std::uint64_t Multisource_multisink_mazeroute::edge_visit_key(const Coordinate_2d& c1,
+        const Coordinate_2d& c2) const {
+    Coordinate_2d low = c1;
+    Coordinate_2d high = c2;
+    if (std::tie(high.x, high.y) < std::tie(low.x, low.y)) {
+        std::swap(low, high);
+    }
+    const std::uint64_t orientation = low.x == high.x ? 1ULL : 0ULL;
+    return (static_cast<std::uint64_t>(low.x) << 33) ^
+            (static_cast<std::uint64_t>(low.y) << 1) ^ orientation;
+}
+
+bool Multisource_multisink_mazeroute::edge_visited_on_color_map(const Coordinate_2d& c1,
+        const Coordinate_2d& c2) const {
+    return color_map_visited_edges.find(edge_visit_key(c1, c2)) != color_map_visited_edges.end();
+}
+
 void Multisource_multisink_mazeroute::bfsSetColorMap(const Coordinate_2d& c1) {
     int net_id = element->net_id;
     stack<Coordinate_2d> Q;
@@ -229,8 +249,8 @@ void Multisource_multisink_mazeroute::bfsSetColorMap(const Coordinate_2d& c1) {
         mmm_map[c.x][c.y].walkableID = visit_counter;
 
         for (EdgePlane<Edge_2d>::Handle& h : congestion.congestionMap2d.neighbors(c)) {
-            if (h.edge().MMVisitFlag != visit_counter && h.edge().lookupNet(net_id)) {
-                h.edge().MMVisitFlag = visit_counter;
+            if (h.edge().lookupNet(net_id) &&
+                    color_map_visited_edges.insert(edge_visit_key(c, h.vertex())).second) {
                 Q.push(h.vertex());
             }
 
@@ -244,6 +264,7 @@ bool Multisource_multisink_mazeroute::mm_maze_route_p(Two_pin_element_2d &ieleme
     MMM_element* sink_pos = nullptr;
     element = &ielement;
     element->path.clear();
+    color_map_visited_edges.clear();
     int boundary_l = start.x;
     int boundary_b = start.y;
     int boundary_r = end.x;
@@ -285,7 +306,7 @@ bool Multisource_multisink_mazeroute::mm_maze_route_p(Two_pin_element_2d &ieleme
 
                 if (version == 2) {
 
-                    if (h.edge().MMVisitFlag != visit_counter) {
+                    if (!edge_visited_on_color_map(cur_pos.coor, h.vertex())) {
                         reachCost += h.edge().cost;
                         ++total_distance;
                         addDistance = true;
@@ -300,7 +321,7 @@ bool Multisource_multisink_mazeroute::mm_maze_route_p(Two_pin_element_2d &ieleme
                     }
 
                 } else { // version==3
-                    if ((h.edge().MMVisitFlag != visit_counter) && (h.edge().cost != 0.0)) {
+                    if (!edge_visited_on_color_map(cur_pos.coor, h.vertex()) && h.edge().cost != 0.0) {
                         reachCost += h.edge().cost;
                         ++total_distance;
                     }
