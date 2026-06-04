@@ -729,6 +729,7 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
         post_processing { routingparam, congestion, *this, rangeRouter }  //
 {
     log_sp = spdlog::get("NTHUR");
+    force_route_remainder = false;
     /***********************
      * Global Variable End
      * ********************/
@@ -918,6 +919,59 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
             }
             output_2_pin_list();
             post_processing.process(route_2pinnets);
+
+            cur_overflow = congestion.cal_max_overflow();
+            const int final_full_limit = env_int("NTHU_FINAL_FULL_REMAINDER_REPAIR_LIMIT", 0);
+            const int final_full_rounds = env_int("NTHU_FINAL_FULL_REMAINDER_REPAIR_ROUNDS", 0);
+            if (cur_overflow > trigger && final_full_limit > 0 && final_full_rounds > 0 &&
+                    cur_overflow <= final_full_limit) {
+                log_sp->info("final full-remainder repair enabled: overflow={} trigger={} limit={} rounds={}",
+                        cur_overflow, trigger, final_full_limit, final_full_rounds);
+                force_route_remainder = true;
+                route_2pinnets.reallocate_two_pin_list();
+                mazeroute_in_range.clear_net_tree();
+                congestion.used_cost_flag = HISTORY_COST;
+                for (int round = 0; round < final_full_rounds; ++round) {
+                    ++congestion.cur_iter;
+                    done_iter = congestion.cur_iter;
+                    log_sp->info("Final full-remainder repair P2 round: {} iter={}",
+                            round + 1, congestion.cur_iter);
+
+                    congestion.factor = (1.0 - std::exp(-5 * std::exp(-(0.1 * congestion.cur_iter))));
+                    congestion.WL_Cost = congestion.factor;
+                    congestion.via_cost = static_cast<int>(4 * congestion.factor);
+
+                    auto iter_start = ProfileClock::now();
+                    profile_start = ProfileClock::now();
+                    congestion.pre_evaluate_congestion_cost();
+                    const double pre_eval_ms = profile_ms(profile_start, ProfileClock::now());
+
+                    profile_start = ProfileClock::now();
+                    route_2pinnets.route_all_2pin_net();
+                    const double route_all_ms = profile_ms(profile_start, ProfileClock::now());
+
+                    profile_start = ProfileClock::now();
+                    cur_overflow = congestion.cal_max_overflow();
+                    const double overflow_ms = profile_ms(profile_start, ProfileClock::now());
+                    profile_start = ProfileClock::now();
+                    congestion.cal_total_wirelength();
+                    const double wirelength_ms = profile_ms(profile_start, ProfileClock::now());
+                    if (do_profile) {
+                        log_sp->info("profile final_full_round={} pre_eval_ms={:.3f} route_all_ms={:.3f} overflow_ms={:.3f} wirelength_ms={:.3f} total_ms={:.3f}",
+                                round + 1, pre_eval_ms, route_all_ms, overflow_ms, wirelength_ms,
+                                profile_ms(iter_start, ProfileClock::now()));
+                    }
+                    if (cur_overflow == 0) {
+                        log_sp->info("Final full-remainder repair reached overflow = 0");
+                        break;
+                    }
+                    route_2pinnets.reallocate_two_pin_list();
+                    BOXSIZE_INC += routingparam.get_box_size_inc_p2();
+                }
+                force_route_remainder = false;
+                output_2_pin_list();
+                post_processing.process(route_2pinnets);
+            }
         } else {
             log_sp->info("adaptive legal repair skipped: overflow={} trigger={}", cur_overflow, trigger);
         }

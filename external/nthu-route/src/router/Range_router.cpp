@@ -1630,7 +1630,7 @@ void NTHUR::RangeRouter::specify_all_range(boost::multi_array<Point_fc, 2>& grid
         route_twopin_candidates(twopin_list, 2);
     }
 
-    if (!skip_remainder_candidates_enabled()) {
+    if (!skip_remainder_candidates_enabled() || construct_2d_tree.force_route_remainder) {
         twopin_list.clear();
         int length = construct_2d_tree.two_pin_list.size();
         for (int i = 0; i < length; ++i) {
