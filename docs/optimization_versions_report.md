@@ -2,7 +2,7 @@
 
 Date: 2026-06-04
 Branch: `vm-fastest-benchmark-guard`
-Latest report commit: `c9b07f3`
+Latest report scope: includes multicore prototype through code commit `e648e19`
 
 ## 1. Report Goal
 
@@ -117,8 +117,21 @@ Interpretation:
   independent two-pin routes can be solved in parallel using a read-only congestion
   snapshot, then committed with legality checks.
 
-Current action: keep OpenMP as a correct low-impact attempt, but use multi-process
-parallel benchmark execution for immediate CPU utilization.
+Follow-up prototype:
+
+| Prototype | Result on `newblue2` | Interpretation |
+| --- | --- | --- |
+| conflict-box parallel maze commit (`db540bb`) | `2609.637s`, aborted after first iteration | unsafe and too slow; shared route state/order still matters. |
+| no-maze parallel + serial maze fallback (`a5465c9`) | `136.985s`, legal | uses more CPU but doubles runtime. |
+| capped no-maze parallel (`e648e19`, cap 4096) | `80.255s`, legal | less bad but still slower than `65.739s` default. |
+| capped no-maze parallel (`e648e19`, cap 512) | `90.646s`, legal | lower utilization and still slower. |
+
+Conclusion: per-testcase multicore reroute was implemented behind
+`NTHU_PARALLEL_REROUTE_BATCHES=1` and measured on the VM, but it should remain
+opt-in only.  It increases CPU utilization, yet route-order changes cause more
+iterations and serial maze fallback still dominates.  The production strategy should
+keep OpenMP as a correct low-impact attempt and use multi-process parallel benchmark
+execution for immediate CPU utilization.
 
 ### 4.3 CUDA Path
 

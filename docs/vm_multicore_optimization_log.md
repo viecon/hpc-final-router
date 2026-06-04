@@ -158,14 +158,61 @@ Expected work:
 
 This is a larger algorithmic change than adding OpenMP pragmas to existing loops.
 
+### Prototype Result: Conflict-Aware Parallel Reroute
+
+Implemented an opt-in prototype on branch `vm-fastest-benchmark-guard`:
+
+- commit `db540bb`: conflict-box batching with local monotonic/maze scratch
+- commit `a5465c9`: disabled parallel maze commit and used serial maze fallback
+- commit `e648e19`: capped parallel overflow candidates by default
+- enable with `NTHU_PARALLEL_REROUTE_BATCHES=1`
+- tune with `NTHU_PARALLEL_REROUTE_BATCH_LIMIT` and
+  `NTHU_PARALLEL_REROUTE_MAX_CANDIDATES`
+
+The first implementation proved that direct parallel maze commit is not acceptable:
+
+```text
+results/vm_parallel_reroute/newblue2_parallel_db540bb_20260604T080748Z/
+```
+
+It raised CPU use but ran for `2609.637s` and aborted after the first iteration.
+Root cause: the original maze router depends on mutable net-tree/cache state and
+route order; even after moving `MMVisitFlag` into a local visited-edge set, committing
+maze reroutes in parallel changed global route state too aggressively.
+
+The safer no-maze parallel attempt stayed legal, but was slower than the default
+sequential reroute loop:
+
+| Version | Env | Seconds | Avg CPU | Iterations | Overflow | WL |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| default `db540bb` | none | 65.739 | 104.159% | 4 | 0 | 7595260 |
+| no-maze fallback `a5465c9` | unlimited, batch 12 | 136.985 | 270.105% | 5 | 0 | 7588984 |
+| capped `e648e19` | cap 4096, batch 12 | 80.255 | 161.766% | 6 | 0 | 7596070 |
+| capped `e648e19` | cap 512, batch 4 | 90.646 | 112.177% | 7 | 0 | 7595345 |
+
+Key observations from `newblue2.fastplace90.3d.50.20.100`:
+
+- parallel batches did increase real CPU use, so the OpenMP runtime was not the issue.
+- reroute order changed enough to require more routing iterations.
+- many candidates that initially touched overflow became no-ops after earlier routes,
+  so pre-batching large candidate sets creates wasted work.
+- preserving correctness requires serial maze fallback, and maze dominates the useful
+  work (`maze_ms` remains several seconds per iteration).
+
+Conclusion: this prototype is useful negative evidence and should remain opt-in only.
+It should not be included in the fastest/legal portfolio.
+
 ## Current Conclusion
 
 The utilization issue is real, but it is not caused by bad OpenMP launch settings.
 The code creates OpenMP worker threads, yet the dominant route mutation loop remains
 serial. The current OpenMP direction is therefore a correct but low-impact optimization.
 
-The next worthwhile multicore attempt is conflict-aware reroute batching, not more
-parallel reductions or thread-binding tweaks.
+Conflict-aware reroute batching was attempted and did not produce a speedup on the
+VM. The next worthwhile multicore direction would need a deeper algorithmic change:
+a read-only congestion snapshot, parallel route proposal generation, and deterministic
+serial commit with final legality checks. The current in-place rip-up/reroute design
+does not parallelize profitably.
 
 ## Action Items
 
