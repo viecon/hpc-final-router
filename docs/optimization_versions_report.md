@@ -59,7 +59,100 @@ Interpretation:
 - 舊 `fast_layer` 類策略可以讓 original-legal 保持合法，但 WL 膨脹太大。
 - 因此問題不是單純「能不能更快」，而是 fast layer 的品質和 budget 的 overflow 需要同時處理。
 
-## 4. Final Quality-Sensitive Result
+## 4. Compute Path And Utilization
+
+三種 compute path 都被當作可能手段測過：單核演算法加速、多核/OpenMP、CUDA。
+結論不是直接放棄多核或 CUDA，而是根據 utilization 判斷目前哪個方向真正有效。
+
+### 4.1 Single-Core Algorithmic Path
+
+目前 final result 主要靠單核演算法改動：
+
+- `fast_layer_netguided_budget`
+- `fast_layer_netguided_repair`
+
+這些版本每個 testcase 仍是單一 `NthuRoute` process，但單 case runtime 下降。
+VM final run 使用：
+
+```text
+MAX_ROUTER_CORES=12
+PARALLEL_BENCH_JOBS=7
+bench_count=7
+run_variants=fast_layer_netguided_budget fast_layer_netguided_repair
+```
+
+也就是每個 testcase 用一個單核 router process，同時跑多個 testcase。這是目前最穩
+的 CPU utilization 方式：不改 shared congestion map 的平行語意，避免 data race，
+但能在 benchmark workflow 層使用多個核心。
+
+### 4.2 Multi-Core / OpenMP Path
+
+OpenMP 版本不是沒有啟動 threads，而是 end-to-end utilization 沒上去。
+
+| Benchmark | Threads | Seconds | Avg process CPU | Avg live threads | Overflow |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| newblue2 | 1 | 65.647 | 99.398% | 1.000 | 0 |
+| newblue2 | 4 | 64.611 | 100.665% | 3.339 | 0 |
+| newblue2 | 8 | 63.587 | 102.198% | 6.508 | 0 |
+| newblue2 | 12 | 63.587 | 103.144% | 9.492 | 0 |
+| adaptec3 | 1 | 491.501 | 99.840% | 1.000 | 0 |
+| adaptec3 | 12 | 485.315 | 101.785% | 11.315 | 0 |
+
+Profile breakdown shows why CPU stays near one effective core:
+
+| Benchmark | Threads | `route_all` share | `specify_all_range` share of `route_all` |
+| --- | ---: | ---: | ---: |
+| newblue2 | 1 | 0.992426 | 0.989974 |
+| newblue2 | 12 | 0.997441 | 0.991347 |
+| adaptec3 | 1 | 0.998021 | 0.998154 |
+| adaptec3 | 12 | 0.999589 | 0.998764 |
+
+Interpretation:
+
+- OpenMP worker threads exist, so this is not a launch/binding failure.
+- The parallelized reductions/scans are too small.
+- The bottleneck is still the sequential rip-up/reroute loop under
+  `RangeRouter::range_router()` / `specify_all_range()`.
+- Real per-testcase multicore speedup needs conflict-aware reroute batching:
+  independent two-pin routes can be solved in parallel using a read-only congestion
+  snapshot, then committed with legality checks.
+
+Current action: keep OpenMP as a correct low-impact attempt, but use multi-process
+parallel benchmark execution for immediate CPU utilization.
+
+### 4.3 CUDA Path
+
+CUDA was tested as single GPU, dual-visible GPU, explicit dual-GPU preselect, and
+two-process throughput.  All measured CUDA rows were legal, but utilization shows
+the GPU work is too small relative to CPU routing.
+
+| Scenario | Benchmark | Seconds | GPU0 avg/max util | GPU1 avg/max util | Result |
+| --- | --- | ---: | ---: | ---: | --- |
+| `single_costed` | adaptec3 | 194.907 | 0.122% / 8% | 0% / 0% | legal |
+| `dual_visible_costed` | adaptec3 | 191.291 | 0.158% / 8% | 0% / 0% | legal |
+| `single_preselect` | adaptec3 | 197.496 | 0.080% / 5% | 0% / 0% | legal |
+| `dual_multigpu_preselect` | adaptec3 | 199.862 | 0.171% / 9% | 0% / 0% | legal |
+
+CUDA profile counters on adaptec3:
+
+| Scenario | `specify_all_range_ms` | `cuda_prepare_ms` | `cuda_maze_ms` |
+| --- | ---: | ---: | ---: |
+| `single_costed` | 54103.715 | 0.000 | 1068.330 |
+| `dual_visible_costed` | 53158.383 | 0.000 | 861.536 |
+| `single_preselect` | 55109.771 | 646.620 | 1044.491 |
+| `dual_multigpu_preselect` | 54744.162 | 728.413 | 848.683 |
+
+Interpretation:
+
+- GPU kernels are correct but too fragmented.
+- GPU average utilization is near zero because CUDA calls are short and separated by
+  CPU sequential routing.
+- Dual GPU does not help single-testcase latency; GPU1 stays effectively idle in
+  current flow.
+- Future CUDA work should batch many candidate evaluations or route boxes into larger
+  GPU work units.  Simply exposing two GPUs is not enough.
+
+## 5. Final Quality-Sensitive Result
 
 Final selected version for original-legal cases:
 
@@ -97,7 +190,7 @@ Compared with previous fastest guarded legal portfolio:
 The final version gives up a small amount of speed but substantially improves score
 quality.  This is the best current answer for "wire length 不差太多且接近 2x speedup".
 
-## 5. Overflow Repair Evidence
+## 6. Overflow Repair Evidence
 
 The faster net-guided budget version still caused overflow on three original-legal
 large cases.  The repair version fixed those cases while keeping WL under `1.5x`.
@@ -111,7 +204,7 @@ large cases.  The repair version fixed those cases while keeping WL under `1.5x`
 This confirms the overflow issue was not in the verifier or output format.  It was
 caused by aggressive routing budget ending before all congested areas were repaired.
 
-## 6. Original-Overflow Cases
+## 7. Original-Overflow Cases
 
 Some requested cases already overflow under original, so they cannot be used to prove
 "no regression from legal to illegal".  For these, the speed-frontier strategy reduces
@@ -128,7 +221,7 @@ overflow dramatically but does not always reach zero.
 These rows are useful for speed and overflow-reduction claims, but not for strict
 zero-overflow final claims.
 
-## 7. Logical Problem Localization
+## 8. Logical Problem Localization
 
 | Observation | Hypothesis Tested | Evidence | Problem Section | Action |
 | --- | --- | --- | --- | --- |
@@ -138,7 +231,7 @@ zero-overflow final claims.
 | Edge-count post-processing is extremely fast. | Could be final router. | 12-case speedup `5.38x`, but only 2/12 legal and only 2/7 original-legal remain legal. | `Post_processing.cpp` candidate pruning too aggressive. | Keep as speed frontier / ablation, not final quality setting. |
 | Dual GPU does not improve single-case runtime. | Maybe two V100s can halve CUDA time. | GPU1 utilization stayed 0 in single-process runs; CUDA work was only about one second inside ~195s adaptec3 run. | `CudaDogleg.cu` and CPU/GPU call granularity. | Use single GPU for latency; future work needs batched GPU work units. |
 
-## 8. Final Conclusion
+## 9. Final Conclusion
 
 The bottleneck analysis shows that simple OpenMP does not solve the dominant sequential
 rip-up/reroute loop, and the fastest CPU/GPU shortcuts can easily damage legality or
