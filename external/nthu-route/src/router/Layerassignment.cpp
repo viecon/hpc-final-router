@@ -37,6 +37,14 @@ double env_double(const char* name, double fallback) {
     return std::atof(value);
 }
 
+int env_int(const char* name, int fallback) {
+    const char* value = std::getenv(name);
+    if (value == nullptr || *value == '\0') {
+        return fallback;
+    }
+    return std::atoi(value);
+}
+
 }
 
 void Layer_assignment::initial_overflow_map() {
@@ -699,6 +707,167 @@ void Layer_assignment::fast_net_guided_layer_assignment() {
     }
 }
 
+void Layer_assignment::repair_layer_overflow() {
+    struct MoveCandidate {
+        int net_id = -1;
+        int layer = -1;
+        double score = std::numeric_limits<double>::infinity();
+    };
+
+    const int layer_count = output.cur_map_3d.getZSize();
+    if (layer_count <= 1) {
+        return;
+    }
+
+    const int max_passes = std::max(1, env_int("NTHU_LAYER_OVERFLOW_REPAIR_MAX_PASSES", 4));
+    const int max_moves = std::max(1, env_int("NTHU_LAYER_OVERFLOW_REPAIR_MAX_MOVES", 200000));
+    const double via_penalty = env_double("NTHU_LAYER_OVERFLOW_REPAIR_VIA_PENALTY", 0.25);
+    const double layer_penalty = env_double("NTHU_LAYER_OVERFLOW_REPAIR_LAYER_PENALTY", 0.001);
+
+    auto xy_demand_after_insert = [](const Edge_3d& edge, int net_id) {
+        int used = static_cast<int>(edge.used_net.size());
+        if (edge.used_net.find(net_id) == edge.used_net.end()) {
+            ++used;
+        }
+        return used * 2;
+    };
+
+    auto inserted_via_demand = [&](const Coordinate_2d& vertex, int z1, int z2, int net_id) {
+        int inserted = 0;
+        const int lo = std::min(z1, z2);
+        const int hi = std::max(z1, z2);
+        for (int z = lo; z < hi; ++z) {
+            const Edge_3d& edge = output.cur_map_3d.edge(
+                    Coordinate_3d { vertex, z }, Coordinate_3d { vertex, z + 1 });
+            if (edge.used_net.find(net_id) == edge.used_net.end()) {
+                ++inserted;
+            }
+        }
+        return inserted;
+    };
+
+    auto can_add_vias = [&](const Coordinate_2d& vertex, int z1, int z2, int net_id) {
+        const int lo = std::min(z1, z2);
+        const int hi = std::max(z1, z2);
+        for (int z = lo; z < hi; ++z) {
+            const Edge_3d& edge = output.cur_map_3d.edge(
+                    Coordinate_3d { vertex, z }, Coordinate_3d { vertex, z + 1 });
+            const int delta = (edge.used_net.find(net_id) == edge.used_net.end()) ? 1 : 0;
+            if (edge.cur_cap + delta > edge.max_cap) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    auto insert_vias = [&](const Coordinate_2d& vertex, int z1, int z2, int net_id) {
+        const int lo = std::min(z1, z2);
+        const int hi = std::max(z1, z2);
+        for (int z = lo; z < hi; ++z) {
+            Edge_3d& edge = output.cur_map_3d.edge(
+                    Coordinate_3d { vertex, z }, Coordinate_3d { vertex, z + 1 });
+            if (edge.used_net.emplace(net_id, 1).second) {
+                ++edge.cur_cap;
+            }
+        }
+    };
+
+    auto find_move = [&](const Coordinate_2d& a, const Coordinate_2d& b, int old_layer,
+            const Edge_3d& old_edge) {
+        MoveCandidate best;
+        for (const auto& net : old_edge.used_net) {
+            const int net_id = net.first;
+            for (int layer = 0; layer < layer_count; ++layer) {
+                if (layer == old_layer) {
+                    continue;
+                }
+                const Edge_3d& new_edge = output.cur_map_3d.edge(
+                        Coordinate_3d { a, layer }, Coordinate_3d { b, layer });
+                if (new_edge.max_cap <= 0 || xy_demand_after_insert(new_edge, net_id) > new_edge.max_cap) {
+                    continue;
+                }
+                if (!can_add_vias(a, old_layer, layer, net_id) ||
+                        !can_add_vias(b, old_layer, layer, net_id)) {
+                    continue;
+                }
+                const int via_delta = inserted_via_demand(a, old_layer, layer, net_id) +
+                        inserted_via_demand(b, old_layer, layer, net_id);
+                const double utilization =
+                        static_cast<double>(xy_demand_after_insert(new_edge, net_id)) /
+                        static_cast<double>(new_edge.max_cap);
+                const double score = utilization +
+                        static_cast<double>(via_delta) * via_penalty +
+                        static_cast<double>(layer) * layer_penalty;
+                if (score < best.score) {
+                    best.net_id = net_id;
+                    best.layer = layer;
+                    best.score = score;
+                }
+            }
+        }
+        return best;
+    };
+
+    auto apply_move = [&](const Coordinate_2d& a, const Coordinate_2d& b, int old_layer,
+            int new_layer, int net_id) {
+        Edge_3d& old_edge = output.cur_map_3d.edge(
+                Coordinate_3d { a, old_layer }, Coordinate_3d { b, old_layer });
+        old_edge.used_net.erase(net_id);
+        old_edge.cur_cap = static_cast<int>(old_edge.used_net.size()) * 2;
+
+        Edge_3d& new_edge = output.cur_map_3d.edge(
+                Coordinate_3d { a, new_layer }, Coordinate_3d { b, new_layer });
+        new_edge.used_net.emplace(net_id, 1);
+        new_edge.cur_cap = static_cast<int>(new_edge.used_net.size()) * 2;
+
+        insert_vias(a, old_layer, new_layer, net_id);
+        insert_vias(b, old_layer, new_layer, net_id);
+    };
+
+    auto repair_edge = [&](const Coordinate_2d& a, const Coordinate_2d& b, int layer, int& moves) {
+        bool moved = false;
+        Edge_3d& edge = output.cur_map_3d.edge(Coordinate_3d { a, layer }, Coordinate_3d { b, layer });
+        while (edge.isOverflow() && moves < max_moves) {
+            const MoveCandidate candidate = find_move(a, b, layer, edge);
+            if (candidate.net_id < 0) {
+                break;
+            }
+            apply_move(a, b, layer, candidate.layer, candidate.net_id);
+            ++moves;
+            moved = true;
+        }
+        return moved;
+    };
+
+    int total_moves = 0;
+    for (int pass = 0; pass < max_passes && total_moves < max_moves; ++pass) {
+        bool moved_in_pass = false;
+        for (int x = 0; x + 1 < output.cur_map_3d.getXSize() && total_moves < max_moves; ++x) {
+            for (int y = 0; y < output.cur_map_3d.getYSize() && total_moves < max_moves; ++y) {
+                const Coordinate_2d a { x, y };
+                const Coordinate_2d b { x + 1, y };
+                for (int z = 0; z < layer_count && total_moves < max_moves; ++z) {
+                    moved_in_pass = repair_edge(a, b, z, total_moves) || moved_in_pass;
+                }
+            }
+        }
+        for (int x = 0; x < output.cur_map_3d.getXSize() && total_moves < max_moves; ++x) {
+            for (int y = 0; y + 1 < output.cur_map_3d.getYSize() && total_moves < max_moves; ++y) {
+                const Coordinate_2d a { x, y };
+                const Coordinate_2d b { x, y + 1 };
+                for (int z = 0; z < layer_count && total_moves < max_moves; ++z) {
+                    moved_in_pass = repair_edge(a, b, z, total_moves) || moved_in_pass;
+                }
+            }
+        }
+        if (!moved_in_pass) {
+            break;
+        }
+    }
+
+    log_sp->info("Layer overflow repair moved {} segments", total_moves);
+}
+
 Layer_assignment::Layer_assignment(const Congestion& congestion, OutputGeneration& output) :
         congestion { congestion }, //
         output { output }, //
@@ -732,6 +901,10 @@ Layer_assignment::Layer_assignment(const Congestion& congestion, OutputGeneratio
         log_sp->info("time = {}s", elapsed_seconds.count());
     } else {
         sort_net_order();
+    }
+
+    if (std::getenv("NTHU_LAYER_OVERFLOW_REPAIR") != nullptr) {
+        repair_layer_overflow();
     }
 
     output.print_max_overflow();
