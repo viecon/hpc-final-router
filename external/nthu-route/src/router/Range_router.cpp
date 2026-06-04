@@ -207,6 +207,18 @@ int parallel_reroute_batch_limit() {
     return std::max(1, std::atoi(value));
 }
 
+int parallel_reroute_max_candidates() {
+    const char* value = std::getenv("NTHU_PARALLEL_REROUTE_MAX_CANDIDATES");
+    if (value == nullptr || *value == '\0') {
+        return 4096;
+    }
+    const int parsed = std::atoi(value);
+    if (parsed <= 0) {
+        return std::numeric_limits<int>::max();
+    }
+    return parsed;
+}
+
 bool profile_enabled() {
     return std::getenv("NTHU_PROFILE") != nullptr;
 }
@@ -1177,6 +1189,12 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             }
             return;
         }
+        const int max_parallel_candidates = parallel_reroute_max_candidates();
+        const int parallel_count = std::min(static_cast<int>(overflow_twopins.size()), max_parallel_candidates);
+        std::vector<Two_pin_element_2d*> serial_tail;
+        if (parallel_count < static_cast<int>(overflow_twopins.size())) {
+            serial_tail.assign(overflow_twopins.begin() + parallel_count, overflow_twopins.end());
+        }
 
         std::unordered_map<int, Rectangle> net_path_boxes;
         net_path_boxes.reserve(construct_2d_tree.two_pin_list.size());
@@ -1189,8 +1207,9 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         }
 
         std::vector<RerouteCandidateBox> remaining;
-        remaining.reserve(overflow_twopins.size());
-        for (Two_pin_element_2d* two_pin : overflow_twopins) {
+        remaining.reserve(parallel_count);
+        for (int i = 0; i < parallel_count; ++i) {
+            Two_pin_element_2d* two_pin = overflow_twopins[i];
             auto net_box = net_path_boxes.find(two_pin->net_id);
             remaining.push_back(RerouteCandidateBox {
                     two_pin,
@@ -1293,6 +1312,11 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 range_router(*two_pin, version);
             }
         }
+        if (!serial_tail.empty()) {
+            for (Two_pin_element_2d* two_pin : serial_tail) {
+                range_router(*two_pin, version);
+            }
+        }
 
         if (do_profile) {
             range_profile.reroute_ms += profile_ms(reroute_start, ProfileClock::now());
@@ -1303,9 +1327,10 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             range_profile.parallel_max_batch = std::max(range_profile.parallel_max_batch, max_batch_size);
         }
         if (do_profile || parallel_reroute_log_enabled()) {
-            log_sp->info("parallel reroute batches candidates={} overflow_candidates={} batches={} parallel_batches={} serialized_inputs={} serial_fallback={} max_batch={} batch_limit={}",
-                    twopin_list.size(), overflow_twopins.size(), batches, parallel_batches,
-                    serialized_inputs, serial_fallback.size(), max_batch_size, batch_limit);
+            log_sp->info("parallel reroute batches candidates={} overflow_candidates={} parallel_candidates={} serial_tail={} batches={} parallel_batches={} serialized_inputs={} serial_fallback={} max_batch={} batch_limit={}",
+                    twopin_list.size(), overflow_twopins.size(), parallel_count, serial_tail.size(),
+                    batches, parallel_batches, serialized_inputs, serial_fallback.size(),
+                    max_batch_size, batch_limit);
         }
         return;
     }
