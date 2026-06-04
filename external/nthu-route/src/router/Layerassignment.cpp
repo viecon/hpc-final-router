@@ -533,6 +533,7 @@ void Layer_assignment::fast_net_guided_layer_assignment() {
             env_double("NTHU_NET_GUIDED_EDGE_CHANGE_PENALTY", 0.35);
     const double edge_layer_penalty = env_double("NTHU_NET_GUIDED_EDGE_LAYER_PENALTY", 0.001);
     const double overflow_penalty = env_double("NTHU_NET_GUIDED_OVERFLOW_PENALTY", 10000.0);
+    const bool low_layer_first = std::getenv("NTHU_NET_GUIDED_LOW_LAYER_FIRST") != nullptr;
     std::vector<std::vector<NetEdge>> net_edges(net_count);
     std::vector<std::vector<VertexLayer>> net_vertex_layers(net_count);
 
@@ -602,8 +603,17 @@ void Layer_assignment::fast_net_guided_layer_assignment() {
                 score += static_cast<double>(overflow) * overflow_penalty;
                 score += static_cast<double>(projected) / static_cast<double>(edge.max_cap);
             }
-            if ((legal_layer && !found_legal_layer) ||
-                    (legal_layer == found_legal_layer && score < best_score)) {
+            if (low_layer_first && legal_layer && !found_legal_layer) {
+                best_layer = z;
+                found_legal_layer = true;
+                best_score = score;
+            } else if (!low_layer_first &&
+                    ((legal_layer && !found_legal_layer) ||
+                     (legal_layer == found_legal_layer && score < best_score))) {
+                best_layer = z;
+                found_legal_layer = legal_layer;
+                best_score = score;
+            } else if (low_layer_first && !found_legal_layer && score < best_score) {
                 best_layer = z;
                 found_legal_layer = legal_layer;
                 best_score = score;
@@ -629,8 +639,17 @@ void Layer_assignment::fast_net_guided_layer_assignment() {
             const double score = static_cast<double>(overflow) * overflow_penalty +
                     static_cast<double>(projected) / static_cast<double>(edge.max_cap) +
                     layer_change_penalty + static_cast<double>(z) * edge_layer_penalty;
-            if ((legal && !found_legal) ||
-                    (legal == found_legal && score < best_score)) {
+            if (low_layer_first && legal && !found_legal) {
+                best_layer = z;
+                found_legal = true;
+                best_score = score;
+            } else if (!low_layer_first &&
+                    ((legal && !found_legal) ||
+                     (legal == found_legal && score < best_score))) {
+                best_layer = z;
+                found_legal = legal;
+                best_score = score;
+            } else if (low_layer_first && !found_legal && score < best_score) {
                 best_layer = z;
                 found_legal = legal;
                 best_score = score;
