@@ -110,6 +110,16 @@ NTHU_ADAPTIVE_REPAIR_P3_BOX_INC=140
 NTHU_POST_SORT_MODE=edge_count
 ```
 
+Experiment runner policy after this report:
+
+- VM experiment scripts default to `VM_EXPERIMENT_CORES=14`.
+- Single-core router strategies use `PARALLEL_BENCH_JOBS=14` by default, so
+  different benchmarks run concurrently.
+- OpenMP diagnostics include a 14-thread point and run one benchmark process at a
+  time for that strategy.
+- The setting is global runner behavior and is not testcase-specific routing
+  logic.
+
 Result root:
 
 ```text

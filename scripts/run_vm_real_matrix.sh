@@ -15,8 +15,8 @@ SUMMARY="$RESULT_ROOT/summary.csv"
 GUARD="$RESULT_ROOT/overflow_guard.csv"
 GUARD_ALL="$RESULT_ROOT/overflow_guard_all.csv"
 GUARD_SUPPORTED="$RESULT_ROOT/overflow_guard_supported.csv"
-JOBS=${JOBS:-4}
-MAX_ROUTER_CORES=${MAX_ROUTER_CORES:-12}
+MAX_ROUTER_CORES=${MAX_ROUTER_CORES:-${VM_EXPERIMENT_CORES:-14}}
+JOBS=${JOBS:-$MAX_ROUTER_CORES}
 OPENMP_THREADS=${OPENMP_THREADS:-4}
 OPENMP_PROC_BIND=${OPENMP_PROC_BIND:-close}
 OPENMP_PLACES=${OPENMP_PLACES:-cores}
@@ -153,6 +153,7 @@ strategy,kind,openmp,cuda,description
 true_original,baseline,OFF,OFF,Original NTHU-Route baseline from external/nthu-route-original
 nthu_openmp_t4,diagnostic,ON,OFF,OpenMP analysis kernels with 4 threads
 nthu_openmp_t12,diagnostic,ON,OFF,OpenMP analysis kernels with 12 threads
+nthu_openmp_t14,diagnostic,ON,OFF,OpenMP analysis kernels with 14 threads
 nthu_fast_layer,cpu_single_core,OFF,OFF,Fast greedy layer assignment with small P2 box
 nthu_fast_layer_continuity,cpu_single_core,OFF,OFF,Fast greedy layer assignment with continuity preference
 nthu_fast_layer_repair,cpu_single_core_guarded,OFF,OFF,Fast layer plus conservative legal repair budget
@@ -243,6 +244,14 @@ build_and_run \
   ON OFF \
   "" \
   12 1
+
+build_and_run \
+  nthu_openmp_t14 \
+  "$ROOT/external/nthu-route" \
+  "$ROOT/external/nthu-route/build-release-vm-openmp-t14" \
+  ON OFF \
+  "" \
+  14 1
 
 build_and_run \
   nthu_fast_layer \
@@ -362,6 +371,7 @@ guard_supported = Path(sys.argv[5])
 supported_strategies = {
     "nthu_openmp_t4",
     "nthu_openmp_t12",
+    "nthu_openmp_t14",
     "nthu_fast_layer",
     "nthu_fast_layer_repair",
     "nthu_p2p3_legal_repair",

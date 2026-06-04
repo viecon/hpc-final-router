@@ -7,7 +7,7 @@ cd "$ROOT"
 RESULT_ROOT=${RESULT_ROOT:-"$ROOT/results/vm_openmp_utilization/$(date -u +%Y%m%dT%H%M%SZ)"}
 BENCH_DIR=${BENCH_DIR:-"$ROOT/benchmarks/ispd08"}
 BENCHES=${BENCHES:-"newblue2.fastplace90.3d.50.20.100.gr"}
-THREADS_LIST=${THREADS_LIST:-"1 4 8 12"}
+THREADS_LIST=${THREADS_LIST:-"1 4 8 12 14"}
 NTHU_DIR=${NTHU_DIR:-"$ROOT/external/nthu-route"}
 BUILD_DIR=${BUILD_DIR:-"$NTHU_DIR/build-release-vm-openmp-util"}
 EVALUATOR=${EVALUATOR:-lab2}
@@ -42,7 +42,7 @@ cmake -S "$NTHU_DIR" -B "$BUILD_DIR" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DNTHU_ROUTE_ENABLE_OPENMP=ON \
   -DNTHU_ROUTE_ENABLE_CUDA=OFF
-cmake --build "$BUILD_DIR" -j "${BUILD_JOBS:-4}"
+cmake --build "$BUILD_DIR" -j "${BUILD_JOBS:-${VM_EXPERIMENT_CORES:-14}}"
 
 SUMMARY="$RESULT_ROOT/summary.csv"
 echo "benchmark,threads,status,seconds,avg_process_cpu,max_process_cpu,avg_live_threads,max_live_threads,evaluator,total_wirelength,total_overflow,max_overflow,overflowed_nets,overflowed_edges,output,log,samples" > "$SUMMARY"
