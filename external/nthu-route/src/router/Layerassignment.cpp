@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <queue>
 #include <stack>
 #include <tuple>
@@ -25,6 +26,18 @@
 #include "router/OutputGeneration.h"
 
 namespace NTHUR {
+
+namespace {
+
+double env_double(const char* name, double fallback) {
+    const char* value = std::getenv(name);
+    if (value == nullptr || *value == '\0') {
+        return fallback;
+    }
+    return std::atof(value);
+}
+
+}
 
 void Layer_assignment::initial_overflow_map() {
 
@@ -515,6 +528,11 @@ void Layer_assignment::fast_net_guided_layer_assignment() {
 
     const int net_count = static_cast<int>(output.get_netNumber());
     const int layer_count = output.cur_map_3d.getZSize();
+    const double net_layer_penalty = env_double("NTHU_NET_GUIDED_LAYER_PENALTY", 0.02);
+    const double edge_layer_change_penalty =
+            env_double("NTHU_NET_GUIDED_EDGE_CHANGE_PENALTY", 0.35);
+    const double edge_layer_penalty = env_double("NTHU_NET_GUIDED_EDGE_LAYER_PENALTY", 0.001);
+    const double overflow_penalty = env_double("NTHU_NET_GUIDED_OVERFLOW_PENALTY", 10000.0);
     std::vector<std::vector<NetEdge>> net_edges(net_count);
     std::vector<std::vector<VertexLayer>> net_vertex_layers(net_count);
 
@@ -567,7 +585,7 @@ void Layer_assignment::fast_net_guided_layer_assignment() {
 
         for (int z = 0; z < layer_count; ++z) {
             bool legal_layer = true;
-            double score = static_cast<double>(z * pin_count) * 0.02;
+            double score = static_cast<double>(z * pin_count) * net_layer_penalty;
             for (const NetEdge& net_edge : net_edges[net_id]) {
                 const Edge_3d& edge = output.cur_map_3d.edge(
                         Coordinate_3d { net_edge.a, z }, Coordinate_3d { net_edge.b, z });
@@ -581,7 +599,7 @@ void Layer_assignment::fast_net_guided_layer_assignment() {
                 if (overflow > 0) {
                     legal_layer = false;
                 }
-                score += static_cast<double>(overflow) * 10000.0;
+                score += static_cast<double>(overflow) * overflow_penalty;
                 score += static_cast<double>(projected) / static_cast<double>(edge.max_cap);
             }
             if ((legal_layer && !found_legal_layer) ||
@@ -607,10 +625,10 @@ void Layer_assignment::fast_net_guided_layer_assignment() {
             const int projected = projected_xy_demand(edge);
             const int overflow = std::max(0, projected - edge.max_cap);
             const bool legal = overflow == 0;
-            const double layer_change_penalty = (z == preferred_layer) ? 0.0 : 0.35;
-            const double score = static_cast<double>(overflow) * 10000.0 +
+            const double layer_change_penalty = (z == preferred_layer) ? 0.0 : edge_layer_change_penalty;
+            const double score = static_cast<double>(overflow) * overflow_penalty +
                     static_cast<double>(projected) / static_cast<double>(edge.max_cap) +
-                    layer_change_penalty + static_cast<double>(z) * 0.001;
+                    layer_change_penalty + static_cast<double>(z) * edge_layer_penalty;
             if ((legal && !found_legal) ||
                     (legal == found_legal && score < best_score)) {
                 best_layer = z;
