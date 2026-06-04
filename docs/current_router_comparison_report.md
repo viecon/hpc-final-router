@@ -2,7 +2,7 @@
 
 Date: 2026-06-04  
 Branch: `vm-fastest-benchmark-guard`  
-Current commit: `58cc00f`
+Reported code commit: `58cc00f` plus this report commit on the same branch.
 
 ## Scope
 
