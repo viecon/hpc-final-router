@@ -843,7 +843,8 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
         if (cur_overflow > trigger) {
             const int adaptive_max_iter = std::max(routingparam.get_iteration_p2(),
                     env_int("NTHU_ADAPTIVE_REPAIR_P2_MAX_ITER", routingparam.get_iteration_p2()));
-            const int current_iter = std::max(1, congestion.cur_iter);
+            const int current_iter = std::min(routingparam.get_iteration_p2(),
+                    std::max(1, congestion.cur_iter));
             log_sp->info("adaptive legal repair enabled: overflow={} trigger={} current_iter={} max_iter={}",
                     cur_overflow, trigger, current_iter, adaptive_max_iter);
             route_2pinnets.reallocate_two_pin_list();
