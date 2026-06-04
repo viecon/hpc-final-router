@@ -32,6 +32,7 @@ struct Post_processing {
     Congestion& congestion;
 
     bool total_no_overflow;
+    int process_call_count;
 
     Construct_2d_tree& construct_2d_tree;
     RangeRouter& rangeRouter;
