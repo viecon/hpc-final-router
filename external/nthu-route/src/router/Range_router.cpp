@@ -649,14 +649,15 @@ std::string NTHUR::RangeRouter::printIfBound(const Rectangle& r, const Rectangle
 //If there is no overflowed path by using the two methods above, then remain 
 //the original path.
 void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version) {
-    range_router(two_pin, version, nullptr, nullptr);
+    (void) range_router(two_pin, version, nullptr, nullptr, true);
 }
 
-void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version,
-        MonotonicRouting* local_monotonic, Multisource_multisink_mazeroute* local_maze) {
+bool NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version,
+        MonotonicRouting* local_monotonic, Multisource_multisink_mazeroute* local_maze,
+        bool allow_maze) {
     static bool cuda_maze_runtime_disabled = false;
     static int cuda_maze_calls_used = 0;
-    const bool use_local_scratch = local_monotonic != nullptr && local_maze != nullptr;
+    const bool use_local_scratch = local_monotonic != nullptr || local_maze != nullptr;
     const bool do_profile = profile_enabled() && !use_local_scratch;
     ProfileClock::time_point phase_start;
     if (do_profile) {
@@ -695,7 +696,7 @@ void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version,
             }
         }
         if (min_reroute_score > 1 && old_path_overflow_score < min_reroute_score) {
-            return;
+            return true;
         }
         if (!use_local_scratch) {
             dump_reroute_candidate(two_pin, congestion.cur_iter, old_path_overflow_score);
@@ -789,6 +790,13 @@ void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version,
             phase_start = after_new_check;
         }
         if ((!find_path_flag) || new_path_has_overflow) {
+            if (!allow_maze) {
+                two_pin.path = original_path;
+                two_pin.pin1 = two_pin.path.front();
+                two_pin.pin2 = two_pin.path.back();
+                congestion.update_congestion_map_insert_two_pin_net(two_pin);
+                return false;
+            }
             Coordinate_2d start;
             Coordinate_2d end;
 
@@ -924,6 +932,7 @@ void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version,
         }
 
     }
+    return true;
 }
 
 bool NTHUR::RangeRouter::try_l_shape_fastpath(Two_pin_element_2d& two_pin) {
@@ -1155,6 +1164,20 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
     if (parallel_reroute_batches_enabled() && twopin_list.size() > 1) {
         const bool do_profile = profile_enabled();
         const auto reroute_start = ProfileClock::now();
+        std::vector<Two_pin_element_2d*> overflow_twopins;
+        overflow_twopins.reserve(twopin_list.size());
+        for (Two_pin_element_2d* two_pin : twopin_list) {
+            if (!congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false)) {
+                overflow_twopins.push_back(two_pin);
+            }
+        }
+        if (overflow_twopins.empty()) {
+            if (do_profile) {
+                range_profile.reroute_ms += profile_ms(reroute_start, ProfileClock::now());
+            }
+            return;
+        }
+
         std::unordered_map<int, Rectangle> net_path_boxes;
         net_path_boxes.reserve(construct_2d_tree.two_pin_list.size());
         for (const Two_pin_element_2d& net_two_pin : construct_2d_tree.two_pin_list) {
@@ -1166,8 +1189,8 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         }
 
         std::vector<RerouteCandidateBox> remaining;
-        remaining.reserve(twopin_list.size());
-        for (Two_pin_element_2d* two_pin : twopin_list) {
+        remaining.reserve(overflow_twopins.size());
+        for (Two_pin_element_2d* two_pin : overflow_twopins) {
             auto net_box = net_path_boxes.find(two_pin->net_id);
             remaining.push_back(RerouteCandidateBox {
                     two_pin,
@@ -1184,59 +1207,91 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         int routed_inputs = 0;
         int serialized_inputs = 0;
         int max_batch_size = 0;
+        std::vector<Two_pin_element_2d*> serial_fallback;
+        serial_fallback.reserve(overflow_twopins.size());
 
-        while (!remaining.empty()) {
-            std::vector<RerouteCandidateBox> batch;
-            std::vector<RerouteCandidateBox> next_remaining;
-            std::unordered_set<int> batch_net_ids;
-            batch.reserve(batch_limit);
-            next_remaining.reserve(remaining.size());
+        std::vector<RerouteCandidateBox> batch;
+        std::vector<RerouteCandidateBox> next_remaining;
+        batch.reserve(batch_limit);
+        next_remaining.reserve(remaining.size());
+        bool done = false;
+        int current_batch_size = 0;
 
-            for (const RerouteCandidateBox& candidate : remaining) {
-                bool conflict = batch_net_ids.find(candidate.two_pin->net_id) != batch_net_ids.end();
-                if (!conflict) {
-                    for (const RerouteCandidateBox& selected : batch) {
-                        if (boxes_overlap(candidate.box, selected.box)) {
-                            conflict = true;
-                            break;
+        const int workers = std::min(batch_limit, static_cast<int>(remaining.size()));
+#pragma omp parallel num_threads(workers)
+        {
+            MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
+            while (true) {
+#pragma omp single
+                {
+                    batch.clear();
+                    next_remaining.clear();
+                    std::unordered_set<int> batch_net_ids;
+                    done = remaining.empty();
+                    if (!done) {
+                        for (const RerouteCandidateBox& candidate : remaining) {
+                            bool conflict = batch_net_ids.find(candidate.two_pin->net_id) != batch_net_ids.end();
+                            if (!conflict) {
+                                for (const RerouteCandidateBox& selected : batch) {
+                                    if (boxes_overlap(candidate.box, selected.box)) {
+                                        conflict = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!conflict && static_cast<int>(batch.size()) < batch_limit) {
+                                batch.push_back(candidate);
+                                batch_net_ids.insert(candidate.two_pin->net_id);
+                            } else {
+                                next_remaining.push_back(candidate);
+                            }
+                        }
+
+                        if (batch.empty()) {
+                            batch.push_back(next_remaining.back());
+                            next_remaining.pop_back();
+                        }
+
+                        ++batches;
+                        current_batch_size = static_cast<int>(batch.size());
+                        routed_inputs += current_batch_size;
+                        max_batch_size = std::max(max_batch_size, current_batch_size);
+                        if (current_batch_size == 1) {
+                            ++serialized_inputs;
+                        } else {
+                            ++parallel_batches;
+                        }
+                        remaining.swap(next_remaining);
+                    }
+                }
+                if (done) {
+                    break;
+                }
+
+                if (current_batch_size == 1) {
+#pragma omp single
+                    {
+                        range_router(*batch.front().two_pin, version);
+                    }
+                } else {
+#pragma omp for schedule(dynamic, 1)
+                    for (int i = 0; i < current_batch_size; ++i) {
+                        if (!range_router(*batch[i].two_pin, version, &local_monotonic, nullptr, false)) {
+#pragma omp critical(nthu_serial_fallback)
+                            {
+                                serial_fallback.push_back(batch[i].two_pin);
+                            }
                         }
                     }
                 }
-                if (!conflict && static_cast<int>(batch.size()) < batch_limit) {
-                    batch.push_back(candidate);
-                    batch_net_ids.insert(candidate.two_pin->net_id);
-                } else {
-                    next_remaining.push_back(candidate);
-                }
+#pragma omp barrier
             }
+        }
 
-            if (batch.empty()) {
-                batch.push_back(next_remaining.back());
-                next_remaining.pop_back();
+        if (!serial_fallback.empty()) {
+            for (Two_pin_element_2d* two_pin : serial_fallback) {
+                range_router(*two_pin, version);
             }
-
-            ++batches;
-            routed_inputs += static_cast<int>(batch.size());
-            max_batch_size = std::max(max_batch_size, static_cast<int>(batch.size()));
-
-            if (batch.size() == 1) {
-                ++serialized_inputs;
-                range_router(*batch.front().two_pin, version);
-            } else {
-                ++parallel_batches;
-                const int workers = std::min(static_cast<int>(batch.size()), batch_limit);
-#pragma omp parallel num_threads(workers)
-                {
-                    MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
-                    Multisource_multisink_mazeroute local_maze(construct_2d_tree, congestion);
-#pragma omp for schedule(dynamic, 1)
-                    for (int i = 0; i < static_cast<int>(batch.size()); ++i) {
-                        range_router(*batch[i].two_pin, version, &local_monotonic, &local_maze);
-                    }
-                }
-            }
-
-            remaining.swap(next_remaining);
         }
 
         if (do_profile) {
@@ -1248,8 +1303,9 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             range_profile.parallel_max_batch = std::max(range_profile.parallel_max_batch, max_batch_size);
         }
         if (do_profile || parallel_reroute_log_enabled()) {
-            log_sp->info("parallel reroute batches candidates={} batches={} parallel_batches={} serialized_inputs={} max_batch={} batch_limit={}",
-                    twopin_list.size(), batches, parallel_batches, serialized_inputs, max_batch_size, batch_limit);
+            log_sp->info("parallel reroute batches candidates={} overflow_candidates={} batches={} parallel_batches={} serialized_inputs={} serial_fallback={} max_batch={} batch_limit={}",
+                    twopin_list.size(), overflow_twopins.size(), batches, parallel_batches,
+                    serialized_inputs, serial_fallback.size(), max_batch_size, batch_limit);
         }
         return;
     }
