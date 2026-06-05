@@ -396,7 +396,11 @@ bool find_strict_legal_maze_path(const NTHUR::Two_pin_element_2d& two_pin,
                 continue;
             }
             const NTHUR::Edge_2d& edge = congestion.congestionMap2d.edge(current, next);
-            if (!edge.lookupNet(two_pin.net_id) && edge.cur_cap + 1.0 > edge.max_cap) {
+            // Reallocation rebuilds each net as a tree; reusing same-net edges can create cycles.
+            if (edge.lookupNet(two_pin.net_id)) {
+                continue;
+            }
+            if (edge.cur_cap + 1.0 > edge.max_cap) {
                 continue;
             }
             const int next_index = index_of(next);
