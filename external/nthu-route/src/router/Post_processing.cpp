@@ -405,6 +405,11 @@ void Post_processing::process(Route_2pinnets& route_2pinnets) {
     congestion.used_cost_flag = MADEOF_COST;
     int cur_overflow = congestion.cal_max_overflow();
     if (cur_overflow > 0) {
+        const int post_stall_limit = std::max(0, env_int("NTHU_POST_STALL_LIMIT", 0));
+        const int post_stall_min_overflow = std::max(0, env_int("NTHU_POST_STALL_MIN_OVERFLOW", 0));
+        const int post_stall_min_delta = std::max(1, env_int("NTHU_POST_STALL_MIN_DELTA", 1));
+        int best_overflow = cur_overflow;
+        int stall_count = 0;
         //In post processing, we only need to pre-evaluate all cost once.
         //The other update will be done by update_add(remove)_edge
         congestion.pre_evaluate_congestion_cost();
@@ -433,6 +438,20 @@ void Post_processing::process(Route_2pinnets& route_2pinnets) {
                 }
                 break;
 }
+            if (post_stall_limit > 0 && cur_overflow > post_stall_min_overflow) {
+                if (cur_overflow + post_stall_min_delta < best_overflow) {
+                    best_overflow = cur_overflow;
+                    stall_count = 0;
+                } else {
+                    ++stall_count;
+                    if (stall_count >= post_stall_limit) {
+                        log_sp->info("post-processing stall stop: iter={} overflow={} best={} limit={} min_delta={} min_overflow={}",
+                                i + 1, cur_overflow, best_overflow, post_stall_limit,
+                                post_stall_min_delta, post_stall_min_overflow);
+                        break;
+                    }
+                }
+            }
             construct_2d_tree.BOXSIZE_INC += inc_num;
             phase_start = ProfileClock::now();
             route_2pinnets.reallocate_two_pin_list();
