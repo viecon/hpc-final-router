@@ -1130,7 +1130,10 @@ bool NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version,
             if (!find_path_flag) {
                 Multisource_multisink_mazeroute& maze_router =
                         local_maze != nullptr ? *local_maze : construct_2d_tree.mazeroute_in_range;
-                find_path_flag = maze_router.mm_maze_route_p(two_pin, bound.cost, bound.distance, bound.via_num, start, end, version);
+                const int max_path_edges =
+                        bounded_length_enabled_this_phase ? bounded_length_limit(original_path) : -1;
+                find_path_flag = maze_router.mm_maze_route_p(two_pin, bound.cost, bound.distance,
+                        bound.via_num, start, end, version, max_path_edges);
             }
             if (do_profile) {
                 auto after_maze = ProfileClock::now();

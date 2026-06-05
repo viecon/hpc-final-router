@@ -125,7 +125,7 @@ public:
     Multisource_multisink_mazeroute(const Multisource_multisink_mazeroute&) = delete;
     void operator=(const Multisource_multisink_mazeroute&) = delete;
 
-    bool mm_maze_route_p(Two_pin_element_2d&element, double bound_cost, int bound_distance, int bound_via_num, Coordinate_2d& start, Coordinate_2d& end, int version);
+    bool mm_maze_route_p(Two_pin_element_2d&element, double bound_cost, int bound_distance, int bound_via_num, Coordinate_2d& start, Coordinate_2d& end, int version, int max_path_edges = -1);
     void clear_net_tree();
 
 private:

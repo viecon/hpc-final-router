@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
+#include <cstdlib>
 #include <stack>
 #include <tuple>
 #include <unordered_map>
@@ -257,7 +258,7 @@ void Multisource_multisink_mazeroute::bfsSetColorMap(const Coordinate_2d& c1) {
         }
     }
 }
-bool Multisource_multisink_mazeroute::mm_maze_route_p(Two_pin_element_2d &ielement, double bound_cost, int bound_distance, int bound_via_num, Coordinate_2d& start, Coordinate_2d& end, int version) {
+bool Multisource_multisink_mazeroute::mm_maze_route_p(Two_pin_element_2d &ielement, double bound_cost, int bound_distance, int bound_via_num, Coordinate_2d& start, Coordinate_2d& end, int version, int max_path_edges) {
 
     bool find_path_flag = false;
 
@@ -372,6 +373,18 @@ bool Multisource_multisink_mazeroute::mm_maze_route_p(Two_pin_element_2d &ieleme
         if (sink_pos != nullptr) {
             find_path_flag = true;
             trace_back_to_find_path_2d(sink_pos);
+            if (max_path_edges >= 0 && !element->path.empty() &&
+                    static_cast<int>(element->path.size()) - 1 > max_path_edges) {
+                if (std::getenv("NTHU_PARALLEL_REROUTE_LOG") != nullptr ||
+                        std::getenv("NTHU_PROFILE") != nullptr) {
+                    log_sp->info("bounded-length maze reject: net={} version={} new_edges={} max_edges={}",
+                            element->net_id, version, static_cast<int>(element->path.size()) - 1,
+                            max_path_edges);
+                }
+                element->path.clear();
+                find_path_flag = false;
+                break;
+            }
             adjust_twopin_element();
             break;
         }
