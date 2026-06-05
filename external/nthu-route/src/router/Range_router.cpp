@@ -280,6 +280,46 @@ bool strict_legal_maze_enabled() {
     return std::getenv("NTHU_STRICT_LEGAL_MAZE") != nullptr;
 }
 
+bool bounded_length_reroute_enabled() {
+    return std::getenv("NTHU_BOUNDED_LENGTH_REROUTE") != nullptr;
+}
+
+bool bounded_length_post_only_enabled() {
+    return std::getenv("NTHU_BOUNDED_LENGTH_POST_ONLY") != nullptr;
+}
+
+int bounded_length_min_iter() {
+    const char* value = std::getenv("NTHU_BOUNDED_LENGTH_MIN_ITER");
+    if (value == nullptr || *value == '\0') {
+        return -1;
+    }
+    return std::atoi(value);
+}
+
+int bounded_length_extra_edges() {
+    const char* value = std::getenv("NTHU_BOUNDED_LENGTH_EXTRA");
+    if (value == nullptr || *value == '\0') {
+        return 8;
+    }
+    return std::max(0, std::atoi(value));
+}
+
+int bounded_length_original_extra_edges() {
+    const char* value = std::getenv("NTHU_BOUNDED_LENGTH_ORIGINAL_EXTRA");
+    if (value == nullptr || *value == '\0') {
+        return 0;
+    }
+    return std::max(0, std::atoi(value));
+}
+
+double bounded_length_ratio() {
+    const char* value = std::getenv("NTHU_BOUNDED_LENGTH_RATIO");
+    if (value == nullptr || *value == '\0') {
+        return 1.20;
+    }
+    return std::max(1.0, std::atof(value));
+}
+
 bool strict_legal_maze_post_only_enabled() {
     return std::getenv("NTHU_STRICT_LEGAL_MAZE_POST_ONLY") != nullptr;
 }
@@ -339,6 +379,39 @@ int inserted_path_overflow_score(const std::vector<NTHUR::Coordinate_2d>& path,
         overflow_score += std::max(0, static_cast<int>(edge.cur_cap + inc - edge.max_cap));
     }
     return overflow_score;
+}
+
+int path_edges(const std::vector<NTHUR::Coordinate_2d>& path) {
+    return path.empty() ? 0 : static_cast<int>(path.size()) - 1;
+}
+
+int path_manhattan_endpoints(const std::vector<NTHUR::Coordinate_2d>& path) {
+    if (path.size() < 2) {
+        return 0;
+    }
+    const NTHUR::Coordinate_2d& a = path.front();
+    const NTHUR::Coordinate_2d& b = path.back();
+    return std::abs(a.x - b.x) + std::abs(a.y - b.y);
+}
+
+bool bounded_length_phase_enabled(int version, int current_iter) {
+    if (!bounded_length_reroute_enabled()) {
+        return false;
+    }
+    if (bounded_length_post_only_enabled() && version != 3) {
+        return false;
+    }
+    return current_iter >= bounded_length_min_iter();
+}
+
+int bounded_length_limit(const std::vector<NTHUR::Coordinate_2d>& original_path) {
+    const int manhattan = path_manhattan_endpoints(original_path);
+    const int original_edges = path_edges(original_path);
+    const int ratio_limit = static_cast<int>(std::ceil(
+            static_cast<double>(manhattan) * bounded_length_ratio())) +
+            bounded_length_extra_edges();
+    const int original_limit = original_edges + bounded_length_original_extra_edges();
+    return std::max(manhattan, std::max(ratio_limit, original_limit));
 }
 
 bool find_strict_legal_maze_path(const NTHUR::Two_pin_element_2d& two_pin,
@@ -825,8 +898,11 @@ bool NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version,
         const bool cuda_maze_enabled_this_phase = !use_local_scratch &&
                 (cuda_maze_fastpath_enabled() || cuda_costed_maze_fastpath_enabled()) &&
                 (!cuda_maze_post_only_enabled() || version == 3);
+        const bool bounded_length_enabled_this_phase =
+                bounded_length_phase_enabled(version, congestion.cur_iter);
         if (dogleg_fastpath_enabled() || (!use_local_scratch && dump_candidates_enabled()) || min_reroute_score > 1 ||
-                cuda_maze_enabled_this_phase || require_post_improvement) {
+                cuda_maze_enabled_this_phase || require_post_improvement ||
+                bounded_length_enabled_this_phase) {
             for (int i = static_cast<int>(two_pin.path.size()) - 2; i >= 0; --i) {
                 const Edge_2d& edge = congestion.congestionMap2d.edge(two_pin.path[i], two_pin.path[i + 1]);
                 old_path_overflow_score += std::max(0, edge.overUsage());
@@ -1071,6 +1147,21 @@ bool NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version,
             const int new_path_overflow_score =
                     inserted_path_overflow_score(two_pin.path, two_pin.net_id, congestion);
             if (new_path_overflow_score + post_accept_min_delta() > old_path_overflow_score) {
+                two_pin.path = original_path;
+                two_pin.pin1 = two_pin.path.front();
+                two_pin.pin2 = two_pin.path.back();
+            }
+        }
+
+        if (find_path_flag && bounded_length_enabled_this_phase) {
+            const int new_edges = path_edges(two_pin.path);
+            const int max_edges = bounded_length_limit(original_path);
+            if (new_edges > max_edges) {
+                if (parallel_reroute_log_enabled() || profile_enabled()) {
+                    log_sp->info("bounded-length reroute reject: net={} version={} iter={} old_edges={} new_edges={} max_edges={} old_overflow={}",
+                            two_pin.net_id, version, congestion.cur_iter, path_edges(original_path),
+                            new_edges, max_edges, old_path_overflow_score);
+                }
                 two_pin.path = original_path;
                 two_pin.pin1 = two_pin.path.front();
                 two_pin.pin2 = two_pin.path.back();
