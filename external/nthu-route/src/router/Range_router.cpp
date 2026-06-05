@@ -292,6 +292,14 @@ int strict_legal_maze_max_area() {
     return std::max(1, std::atoi(value));
 }
 
+int strict_legal_maze_min_iter() {
+    const char* value = std::getenv("NTHU_STRICT_LEGAL_MAZE_MIN_ITER");
+    if (value == nullptr || *value == '\0') {
+        return -1;
+    }
+    return std::atoi(value);
+}
+
 int post_accept_min_delta() {
     const char* value = std::getenv("NTHU_POST_ACCEPT_MIN_DELTA");
     if (value == nullptr || *value == '\0') {
@@ -1030,7 +1038,8 @@ bool NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version,
 
             if (!find_path_flag) {
                 const bool strict_legal_enabled_this_phase = strict_legal_maze_enabled() &&
-                        (!strict_legal_maze_post_only_enabled() || version == 3);
+                        (!strict_legal_maze_post_only_enabled() || version == 3) &&
+                        congestion.cur_iter >= strict_legal_maze_min_iter();
                 if (strict_legal_enabled_this_phase) {
                     std::vector<Coordinate_2d> legal_path;
                     if (find_strict_legal_maze_path(two_pin, congestion, start, end, legal_path)) {
