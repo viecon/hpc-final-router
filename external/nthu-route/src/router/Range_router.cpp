@@ -7,12 +7,14 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstdint>
 #include <exception>
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <queue>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -274,6 +276,22 @@ bool post_accept_improvement_enabled() {
     return std::getenv("NTHU_POST_ACCEPT_IMPROVEMENT") != nullptr;
 }
 
+bool strict_legal_maze_enabled() {
+    return std::getenv("NTHU_STRICT_LEGAL_MAZE") != nullptr;
+}
+
+bool strict_legal_maze_post_only_enabled() {
+    return std::getenv("NTHU_STRICT_LEGAL_MAZE_POST_ONLY") != nullptr;
+}
+
+int strict_legal_maze_max_area() {
+    const char* value = std::getenv("NTHU_STRICT_LEGAL_MAZE_MAX_AREA");
+    if (value == nullptr || *value == '\0') {
+        return 250000;
+    }
+    return std::max(1, std::atoi(value));
+}
+
 int post_accept_min_delta() {
     const char* value = std::getenv("NTHU_POST_ACCEPT_MIN_DELTA");
     if (value == nullptr || *value == '\0') {
@@ -313,6 +331,101 @@ int inserted_path_overflow_score(const std::vector<NTHUR::Coordinate_2d>& path,
         overflow_score += std::max(0, static_cast<int>(edge.cur_cap + inc - edge.max_cap));
     }
     return overflow_score;
+}
+
+bool find_strict_legal_maze_path(const NTHUR::Two_pin_element_2d& two_pin,
+        const NTHUR::Congestion& congestion,
+        const NTHUR::Coordinate_2d& start,
+        const NTHUR::Coordinate_2d& end,
+        std::vector<NTHUR::Coordinate_2d>& path) {
+    const int width = end.x - start.x + 1;
+    const int height = end.y - start.y + 1;
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+    const int max_area = strict_legal_maze_max_area();
+    if (width > max_area / height) {
+        return false;
+    }
+
+    auto in_box = [&](const NTHUR::Coordinate_2d& c) {
+        return c.x >= start.x && c.x <= end.x && c.y >= start.y && c.y <= end.y;
+    };
+    if (!in_box(two_pin.pin1) || !in_box(two_pin.pin2)) {
+        return false;
+    }
+
+    const int area = width * height;
+    auto index_of = [&](const NTHUR::Coordinate_2d& c) {
+        return (c.y - start.y) * width + (c.x - start.x);
+    };
+    auto coordinate_of = [&](int index) {
+        return NTHUR::Coordinate_2d { start.x + (index % width), start.y + (index / width) };
+    };
+
+    const int source = index_of(two_pin.pin1);
+    const int target = index_of(two_pin.pin2);
+    std::vector<double> dist(area, std::numeric_limits<double>::infinity());
+    std::vector<int> parent(area, -1);
+    using QueueItem = std::pair<double, int>;
+    std::priority_queue<QueueItem, std::vector<QueueItem>, std::greater<QueueItem>> queue;
+    dist[source] = 0.0;
+    queue.push({ 0.0, source });
+
+    const std::array<NTHUR::Coordinate_2d, 4> directions {
+            NTHUR::Coordinate_2d { 1, 0 },
+            NTHUR::Coordinate_2d { -1, 0 },
+            NTHUR::Coordinate_2d { 0, 1 },
+            NTHUR::Coordinate_2d { 0, -1 } };
+
+    while (!queue.empty()) {
+        const QueueItem item = queue.top();
+        const double cost = item.first;
+        const int current_index = item.second;
+        queue.pop();
+        if (cost != dist[current_index]) {
+            continue;
+        }
+        if (current_index == target) {
+            break;
+        }
+        const NTHUR::Coordinate_2d current = coordinate_of(current_index);
+        for (const NTHUR::Coordinate_2d& direction : directions) {
+            const NTHUR::Coordinate_2d next { current.x + direction.x, current.y + direction.y };
+            if (!in_box(next)) {
+                continue;
+            }
+            const NTHUR::Edge_2d& edge = congestion.congestionMap2d.edge(current, next);
+            if (!edge.lookupNet(two_pin.net_id) && edge.cur_cap + 1.0 > edge.max_cap) {
+                continue;
+            }
+            const int next_index = index_of(next);
+            const double edge_cost = 1.0 + std::max(0.0, edge.cost);
+            const double next_cost = cost + edge_cost;
+            if (next_cost < dist[next_index]) {
+                dist[next_index] = next_cost;
+                parent[next_index] = current_index;
+                queue.push({ next_cost, next_index });
+            }
+        }
+    }
+
+    if (!std::isfinite(dist[target])) {
+        return false;
+    }
+    path.clear();
+    for (int at = target; at != -1; at = parent[at]) {
+        path.push_back(coordinate_of(at));
+        if (at == source) {
+            break;
+        }
+    }
+    if (path.empty() || path.back() != two_pin.pin1) {
+        path.clear();
+        return false;
+    }
+    std::reverse(path.begin(), path.end());
+    return path.size() >= 2;
 }
 
 void sort_twopins_by_overflow_score(std::vector<NTHUR::Two_pin_element_2d*>& twopin_list,
@@ -908,6 +1021,20 @@ bool NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version,
                     }
                 } else if (do_profile) {
                     ++range_profile.cuda_maze_area_skips;
+                }
+            }
+
+            if (!find_path_flag) {
+                const bool strict_legal_enabled_this_phase = strict_legal_maze_enabled() &&
+                        (!strict_legal_maze_post_only_enabled() || version == 3);
+                if (strict_legal_enabled_this_phase) {
+                    std::vector<Coordinate_2d> legal_path;
+                    if (find_strict_legal_maze_path(two_pin, congestion, start, end, legal_path)) {
+                        two_pin.path = std::move(legal_path);
+                        two_pin.pin1 = two_pin.path.front();
+                        two_pin.pin2 = two_pin.path.back();
+                        find_path_flag = true;
+                    }
                 }
             }
 
