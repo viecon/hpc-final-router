@@ -856,6 +856,14 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
                     env_int("NTHU_ADAPTIVE_REPAIR_P2_MAX_ITER", routingparam.get_iteration_p2()));
             const int current_iter = std::min(routingparam.get_iteration_p2(),
                     std::max(1, congestion.cur_iter));
+            const int high_overflow_trigger = env_int("NTHU_ADAPTIVE_HIGH_OVERFLOW_P2_TRIGGER", 0);
+            const int high_overflow_max_iter = env_int("NTHU_ADAPTIVE_HIGH_OVERFLOW_P2_MAX_ITER", adaptive_max_iter);
+            if (high_overflow_trigger > 0 && cur_overflow >= high_overflow_trigger &&
+                    high_overflow_max_iter > adaptive_max_iter) {
+                log_sp->info("adaptive high-overflow P2 budget: overflow={} trigger={} max_iter {} -> {}",
+                        cur_overflow, high_overflow_trigger, adaptive_max_iter, high_overflow_max_iter);
+                adaptive_max_iter = high_overflow_max_iter;
+            }
             const int small_overflow_limit = env_int("NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_LIMIT", 0);
             const int small_overflow_rounds = env_int("NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS", 0);
             if (small_overflow_limit > 0 && small_overflow_rounds > 0 &&
