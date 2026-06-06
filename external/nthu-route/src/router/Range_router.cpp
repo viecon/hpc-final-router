@@ -14,6 +14,7 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <queue>
 #include <string>
 #include <unordered_set>
@@ -1620,6 +1621,87 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             }
         };
 
+        struct TransactionBatch {
+            std::vector<RerouteCandidateBox> items;
+            std::unordered_set<int> net_ids;
+            int first_order = 0;
+        };
+
+        auto batch_can_accept = [&](const TransactionBatch& candidate_batch,
+                const RerouteCandidateBox& candidate) {
+            if (candidate_batch.net_ids.find(candidate.two_pin->net_id) !=
+                    candidate_batch.net_ids.end()) {
+                return false;
+            }
+            for (const RerouteCandidateBox& selected : candidate_batch.items) {
+                if (boxes_overlap(candidate.box, selected.box)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        auto add_to_batch = [&](TransactionBatch& candidate_batch,
+                const RerouteCandidateBox& candidate) {
+            candidate_batch.items.push_back(candidate);
+            candidate_batch.net_ids.insert(candidate.two_pin->net_id);
+        };
+
+        const auto plan_start = ProfileClock::now();
+        std::vector<TransactionBatch> open_batches;
+        std::vector<TransactionBatch> planned_batches;
+        open_batches.reserve(batch_limit);
+        planned_batches.reserve(std::max(1, transaction_count / std::max(1, batch_limit)));
+        for (int order = 0; order < static_cast<int>(remaining.size()); ++order) {
+            const RerouteCandidateBox& candidate = remaining[order];
+            bool placed = false;
+            for (auto batch_it = open_batches.begin(); batch_it != open_batches.end(); ++batch_it) {
+                if (!batch_can_accept(*batch_it, candidate)) {
+                    continue;
+                }
+                add_to_batch(*batch_it, candidate);
+                placed = true;
+                if (static_cast<int>(batch_it->items.size()) >= batch_limit) {
+                    planned_batches.push_back(std::move(*batch_it));
+                    open_batches.erase(batch_it);
+                }
+                break;
+            }
+            if (!placed) {
+                TransactionBatch new_batch;
+                new_batch.first_order = order;
+                new_batch.items.reserve(batch_limit);
+                new_batch.net_ids.reserve(batch_limit);
+                add_to_batch(new_batch, candidate);
+                if (batch_limit == 1) {
+                    planned_batches.push_back(std::move(new_batch));
+                } else {
+                    open_batches.push_back(std::move(new_batch));
+                }
+            }
+        }
+        for (TransactionBatch& candidate_batch : open_batches) {
+            planned_batches.push_back(std::move(candidate_batch));
+        }
+        std::sort(planned_batches.begin(), planned_batches.end(),
+                [](const TransactionBatch& a, const TransactionBatch& b) {
+                    return a.first_order < b.first_order;
+                });
+        const double plan_ms = profile_ms(plan_start, ProfileClock::now());
+
+#ifdef NTHU_ROUTE_OPENMP
+        const int scratch_count = std::max(1, std::min(batch_limit, transaction_count));
+        std::vector<std::unique_ptr<MonotonicRouting>> monotonic_scratch;
+        monotonic_scratch.reserve(scratch_count);
+        for (int i = 0; i < scratch_count; ++i) {
+            monotonic_scratch.emplace_back(
+                    std::unique_ptr<MonotonicRouting>(
+                            new MonotonicRouting(congestion, monotonic_enable_flag)));
+        }
+#else
+        MonotonicRouting monotonic_scratch(congestion, monotonic_enable_flag);
+#endif
+
         int batches = 0;
         int parallel_batches = 0;
         int serialized_batches = 0;
@@ -1633,39 +1715,8 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         double propose_ms = 0.0;
         double commit_ms = 0.0;
 
-        std::vector<RerouteCandidateBox> batch;
-        std::vector<RerouteCandidateBox> next_remaining;
-        batch.reserve(batch_limit);
-        next_remaining.reserve(remaining.size());
-
-        while (!remaining.empty()) {
-            batch.clear();
-            next_remaining.clear();
-            std::unordered_set<int> batch_net_ids;
-            for (const RerouteCandidateBox& candidate : remaining) {
-                bool conflict = batch_net_ids.find(candidate.two_pin->net_id) != batch_net_ids.end();
-                if (!conflict) {
-                    for (const RerouteCandidateBox& selected : batch) {
-                        if (boxes_overlap(candidate.box, selected.box)) {
-                            conflict = true;
-                            break;
-                        }
-                    }
-                }
-                if (!conflict && static_cast<int>(batch.size()) < batch_limit) {
-                    batch.push_back(candidate);
-                    batch_net_ids.insert(candidate.two_pin->net_id);
-                } else {
-                    next_remaining.push_back(candidate);
-                }
-            }
-            if (batch.empty()) {
-                batch.push_back(next_remaining.back());
-                next_remaining.pop_back();
-            }
-            remaining.swap(next_remaining);
-
-            const int current_batch_size = static_cast<int>(batch.size());
+        for (const TransactionBatch& transaction_batch : planned_batches) {
+            const int current_batch_size = static_cast<int>(transaction_batch.items.size());
             ++batches;
             max_batch_size = std::max(max_batch_size, current_batch_size);
             if (current_batch_size > 1) {
@@ -1677,27 +1728,23 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             std::vector<TransactionProposal> proposals(current_batch_size);
             const auto propose_start = ProfileClock::now();
 #ifdef NTHU_ROUTE_OPENMP
-            const int workers = std::max(1, std::min(batch_limit, current_batch_size));
+            const int workers = std::max(1, std::min(scratch_count, current_batch_size));
             max_workers_used = std::max(max_workers_used, workers);
-#pragma omp parallel num_threads(workers)
-            {
-                MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
-#pragma omp for schedule(dynamic, 1)
-                for (int i = 0; i < current_batch_size; ++i) {
-                    make_transaction(batch[i].two_pin, local_monotonic, proposals[i]);
-                }
+#pragma omp parallel for num_threads(workers) schedule(dynamic, 1)
+            for (int i = 0; i < current_batch_size; ++i) {
+                make_transaction(transaction_batch.items[i].two_pin,
+                        *monotonic_scratch[omp_get_thread_num()], proposals[i]);
             }
 #else
-            MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
             for (int i = 0; i < current_batch_size; ++i) {
-                make_transaction(batch[i].two_pin, local_monotonic, proposals[i]);
+                make_transaction(transaction_batch.items[i].two_pin, monotonic_scratch, proposals[i]);
             }
 #endif
             propose_ms += profile_ms(propose_start, ProfileClock::now());
 
             const auto commit_start = ProfileClock::now();
             for (int i = 0; i < current_batch_size; ++i) {
-                Two_pin_element_2d* two_pin = batch[i].two_pin;
+                Two_pin_element_2d* two_pin = transaction_batch.items[i].two_pin;
                 const TransactionProposal& proposal = proposals[i];
                 if (proposal.valid) {
                     ++proposed;
@@ -1738,12 +1785,12 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             range_profile.parallel_max_batch = std::max(range_profile.parallel_max_batch, max_batch_size);
         }
         if (do_profile || parallel_reroute_log_enabled()) {
-            log_sp->info("transactional reroute candidates={} overflow_candidates={} transaction_candidates={} skipped_by_limit={} batches={} parallel_batches={} serialized_batches={} proposed={} committed={} invalid={} commit_rejected={} clean_skipped={} max_batch={} max_workers={} batch_limit={} l_shape={} dogleg={} strict_maze={} fallback=0 propose_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("transactional reroute candidates={} overflow_candidates={} transaction_candidates={} skipped_by_limit={} batches={} parallel_batches={} serialized_batches={} proposed={} committed={} invalid={} commit_rejected={} clean_skipped={} max_batch={} max_workers={} batch_limit={} l_shape={} dogleg={} strict_maze={} fallback=0 plan_ms={:.3f} propose_ms={:.3f} commit_ms={:.3f}",
                     twopin_list.size(), overflow_twopins.size(), transaction_count, skipped_by_limit,
                     batches, parallel_batches, serialized_batches, proposed, committed, invalid,
                     commit_rejected, clean_skipped, max_batch_size, max_workers_used, batch_limit,
                     try_l_shape ? 1 : 0, try_dogleg ? 1 : 0, try_strict_maze ? 1 : 0,
-                    propose_ms, commit_ms);
+                    plan_ms, propose_ms, commit_ms);
         }
         return;
     }

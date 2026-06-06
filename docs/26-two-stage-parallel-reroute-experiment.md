@@ -190,10 +190,62 @@ This is why the process can show 14 live threads but still average only about
 one core. The part made parallel by this experiment is too small; the runtime is
 still dominated by serial fallback, route order, and congestion/tree mutation.
 
+## No-Fallback Transactional Reroute
+
+Commit: `de658dd`
+
+Result root:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_de658dd_transactional_nomaze
+```
+
+This run enabled:
+
+```bash
+NTHU_TRANSACTIONAL_REROUTE_BATCHES=1
+NTHU_TRANSACTIONAL_BATCH_LIMIT=14
+```
+
+and did not enable strict maze. It used no fallback.
+
+| Variant | Router s | Avg CPU | Max CPU | Live threads avg/max | WL | Overflow |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| transactional no-maze | 378.126 | 506.480% | 609.000% | 9.495 / 14 | 8876411 | 0 |
+
+This proves the code is genuinely parallelizing transaction proposal, but the
+first scheduler was too expensive: `newblue2` became `8.62x` slower than the
+baseline OpenMP14 row (`43.849s`). Representative first-iteration log:
+
+```text
+transaction_candidates=161023
+batches=17510
+parallel_batches=15824
+serialized_batches=1686
+proposed=18313
+committed=8841
+invalid=142710
+fallback=0
+propose_ms=30502.659
+commit_ms=223.800
+```
+
+Two bottlenecks were identified:
+
+- conflict batching repeatedly scanned the remaining candidate list and produced
+  tens of thousands of tiny batches;
+- each batch rebuilt thread-local `MonotonicRouting` scratch, so batch overhead
+  dominated actual routing work.
+
+Follow-up implementation after `de658dd`:
+
+- one-pass greedy conflict coloring instead of repeated remaining-list scans;
+- one reusable `MonotonicRouting` scratch object per OpenMP worker;
+- log `plan_ms` separately from `propose_ms` and `commit_ms`.
+
 ## Status
 
-The branch is useful as a negative/diagnostic experiment, not as a final router
-strategy. It proves that merely moving cheap candidate proposal to OpenMP does
-not create enough parallel work; a real multicore gain would need to parallelize
-the expensive fallback/maze path with a transaction-safe tree and congestion
-commit model.
+The branch is useful as a diagnostic experiment, not yet a final router
+strategy. `de658dd` proves the no-fallback transaction path can safely use
+multiple cores, but it needs a lower-overhead scheduler and better transaction
+coverage before it can be competitive.
