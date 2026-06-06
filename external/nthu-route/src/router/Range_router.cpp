@@ -287,7 +287,8 @@ bool transactional_dogleg_enabled() {
 }
 
 bool transactional_strict_maze_enabled() {
-    return std::getenv("NTHU_TRANSACTIONAL_STRICT_MAZE") != nullptr;
+    const char* value = std::getenv("NTHU_TRANSACTIONAL_STRICT_MAZE");
+    return value == nullptr || *value == '\0' || std::atoi(value) != 0;
 }
 
 bool transactional_conflict_graph_enabled() {
@@ -312,6 +313,17 @@ int transactional_max_candidates() {
         return std::numeric_limits<int>::max();
     }
     return parsed;
+}
+
+int transactional_strict_maze_max_area() {
+    const char* value = std::getenv("NTHU_TRANSACTIONAL_STRICT_MAZE_MAX_AREA");
+    if (value == nullptr || *value == '\0') {
+        value = std::getenv("NTHU_STRICT_LEGAL_MAZE_MAX_AREA");
+    }
+    if (value == nullptr || *value == '\0') {
+        return 4096;
+    }
+    return std::max(1, std::atoi(value));
 }
 
 bool profile_enabled() {
@@ -511,13 +523,13 @@ bool find_strict_legal_maze_path(const NTHUR::Two_pin_element_2d& two_pin,
         const NTHUR::Congestion& congestion,
         const NTHUR::Coordinate_2d& start,
         const NTHUR::Coordinate_2d& end,
+        int max_area,
         std::vector<NTHUR::Coordinate_2d>& path) {
     const int width = end.x - start.x + 1;
     const int height = end.y - start.y + 1;
     if (width <= 0 || height <= 0) {
         return false;
     }
-    const int max_area = strict_legal_maze_max_area();
     if (width > max_area / height) {
         return false;
     }
@@ -1211,7 +1223,8 @@ bool NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version,
                         congestion.cur_iter >= strict_legal_maze_min_iter();
                 if (strict_legal_enabled_this_phase) {
                     std::vector<Coordinate_2d> legal_path;
-                    if (find_strict_legal_maze_path(two_pin, congestion, start, end, legal_path)) {
+                    if (find_strict_legal_maze_path(two_pin, congestion, start, end,
+                            strict_legal_maze_max_area(), legal_path)) {
                         two_pin.path = std::move(legal_path);
                         two_pin.pin1 = two_pin.path.front();
                         two_pin.pin2 = two_pin.path.back();
@@ -1528,6 +1541,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         const bool try_l_shape = transactional_l_shape_enabled();
         const bool try_dogleg = transactional_dogleg_enabled();
         const bool try_strict_maze = transactional_strict_maze_enabled();
+        const int strict_maze_area = transactional_strict_maze_max_area();
         const bool use_conflict_graph = transactional_conflict_graph_enabled();
 
         std::unordered_map<int, Rectangle> net_path_boxes;
@@ -1620,7 +1634,8 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 end.x = min(construct_2d_tree.rr_map.get_gridx() - 1, end.x + size);
                 end.y = min(construct_2d_tree.rr_map.get_gridy() - 1, end.y + size);
                 std::vector<Coordinate_2d> legal_path;
-                if (find_strict_legal_maze_path(*source, congestion, start, end, legal_path)) {
+                if (find_strict_legal_maze_path(*source, congestion, start, end,
+                        strict_maze_area, legal_path)) {
                     (void) accept_transaction_path(*source, legal_path, proposal);
                 }
             }
@@ -1804,13 +1819,13 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             range_profile.parallel_max_batch = std::max(range_profile.parallel_max_batch, max_batch_size);
         }
         if (do_profile || parallel_reroute_log_enabled()) {
-            log_sp->info("transactional reroute candidates={} overflow_candidates={} transaction_candidates={} skipped_by_limit={} batches={} parallel_batches={} serialized_batches={} proposed={} committed={} invalid={} commit_rejected={} clean_skipped={} max_batch={} max_workers={} batch_limit={} scheduler={} l_shape={} dogleg={} strict_maze={} fallback=0 plan_ms={:.3f} propose_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("transactional reroute candidates={} overflow_candidates={} transaction_candidates={} skipped_by_limit={} batches={} parallel_batches={} serialized_batches={} proposed={} committed={} invalid={} commit_rejected={} clean_skipped={} max_batch={} max_workers={} batch_limit={} scheduler={} l_shape={} dogleg={} strict_maze={} strict_maze_area={} fallback=0 plan_ms={:.3f} propose_ms={:.3f} commit_ms={:.3f}",
                     twopin_list.size(), overflow_twopins.size(), transaction_count, skipped_by_limit,
                     batches, parallel_batches, serialized_batches, proposed, committed, invalid,
                     commit_rejected, clean_skipped, max_batch_size, max_workers_used, batch_limit,
                     use_conflict_graph ? "conflict" : "chunk",
                     try_l_shape ? 1 : 0, try_dogleg ? 1 : 0, try_strict_maze ? 1 : 0,
-                    plan_ms, propose_ms, commit_ms);
+                    strict_maze_area, plan_ms, propose_ms, commit_ms);
         }
         return;
     }
