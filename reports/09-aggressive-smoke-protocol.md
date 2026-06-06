@@ -247,6 +247,43 @@ Next validation:
 - If all original-legal cases stay legal and the aggregate speedup remains
   above `prev_final`, then run requested12.
 
+### Legal7 Guard Early Classification
+
+The legal7 expansion exposed a legality failure that the easy/hard smoke did not
+cover:
+
+| Benchmark | Status | Overflow / Max | Classification |
+| --- | --- | ---: | --- |
+| `adaptec1` | `ok` | `1212 / 6` | original-legal guard failure |
+| `adaptec3` | `ok` | `10 / 2` | original-legal guard failure |
+| `bigblue1` | `ok` | `3882 / 8` | original-legal guard failure |
+
+This is not a timeout and not a crash.  The issue is that
+`frontier_edgecount_netguided_v2` is a runtime-frontier config: it keeps the fast
+layer/dogleg/range-skip path, but removes too much legalization budget for some
+original-legal cases.
+
+Follow-up candidate:
+
+```text
+frontier_netguided_adaptive_repair_v3
+```
+
+Logic:
+
+- keep v2's fast frontier mechanisms;
+- restore routing-state adaptive legal repair only when measured overflow remains
+  after post-processing;
+- use high-overflow P2 repair and a small final full-remainder repair gate;
+- keep one config for all benchmarks.
+
+Classification rule:
+
+- If v3 fixes legal7 without a 3x timeout, v2's failure is a support-policy issue
+  inside the frontier family.
+- If v3 is still illegal or slower than the 3x gate, this frontier family is
+  rejected as an overall candidate and kept only as runtime-frontier evidence.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:
