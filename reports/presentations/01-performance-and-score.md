@@ -90,6 +90,11 @@ newblue1, newblue2, newblue5, newblue6
 order-sensitive。直接加 lock 會把它序列化；硬做 batch 則要付出 conflict
 detection、fallback、route order 變動的成本。
 
+更精確地說：目前 implementation 只能安全地 sequential commit。若要真的平行化
+`rip-up/reroute`，需要重構成「read-only congestion snapshot 上平行產生 route
+proposal，再 deterministic serial commit」的兩階段流程。這不是多加幾個
+`OpenMP` pragma 可以完成的小改。
+
 Amdahl's law 可以把這件事量化：
 
 ```text

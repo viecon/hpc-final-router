@@ -30,7 +30,47 @@
 batch independent route proposals，先平行算 candidate，再用 deterministic order
 commit。
 
-## 投影片 3 - Amdahl's law：可平行化比例有多小
+## 投影片 3 - 為什麼目前只能安全地 sequential commit
+
+這裡不是說 `rip-up/reroute` 理論上永遠不能平行化，而是目前 NTHU-Route 的
+implementation 把「找路」和「commit」綁在同一個 in-place 流程，所以直接多
+thread 會改變結果。
+
+| 程式位置 | 實際相依性 | 為什麼會卡平行化 |
+| --- | --- | --- |
+| `Route_2pinnets::route_all_2pin_net()` | 主要時間進入 `RangeRouter::specify_all_range()`。 | hot path 不是單純 scan，而是進到 route mutation。 |
+| `RangeRouter::range_router()` | 先讀 old path overflow，再 `remove` old path，找新 path，最後 `insert` new path。 | 每條 net 的新 cost 依賴前面 nets 已經 commit 後的 `congestion map`。 |
+| `Congestion::update_congestion_map_remove_two_pin_net()` / `insert_two_pin_net()` | 直接修改 `edge.used_net`、`edge.cur_cap`，並重新計算 edge cost。 | 兩個 thread 若碰到同一條 edge，會 data race；即使用 lock，route order 仍會改變結果。 |
+| `MM_mazeroute::adjust_twopin_element()` | maze 成功後會改 `two_pin.path`、pin endpoints、net tree neighbor 關係。 | 不只是 edge demand，net tree 結構本身也會 mutation。 |
+| `Post_processing::initial_for_post_processing()` | 依排序後的 overflow candidates 逐一呼叫 `rangeRouter.range_router()`。 | 前一個 candidate 修完後，後面 candidate 的 overflow 狀態可能已經變了。 |
+
+所以「直接平行化」會遇到三個問題：
+
+1. shared `congestion map` 的 demand/cost race；
+2. route order 改變，導致 `wirelength` / `overflow` 結果不 deterministic；
+3. maze route 和 net tree update 不是純函式，不能安全地同時 commit。
+
+我們其實有做過 parallel prototype：先用 conflict box 找不重疊的 candidates，
+再平行處理。結果 CPU utilization 有上升，但因為 route order 變動、serial
+fallback、stale candidates，`newblue2` 反而從 default `65.739s` 變成 best
+`80.255s`，第一版 direct parallel maze commit 還跑到 `2609.637s` 並 abort。
+
+## 投影片 4 - 如果要平行化，必須改成兩階段架構
+
+可以改，但不是小改。需要把目前 in-place reroute 拆成 proposal 和 commit：
+
+| 階段 | 目前作法 | 可平行版本需要改成 |
+| --- | --- | --- |
+| 讀 congestion | route 時直接讀目前 mutable `congestion map`。 | 建立 read-only congestion snapshot。 |
+| 找 candidate path | 找到 path 後直接寫回 `two_pin.path`。 | 每個 thread 只產生 route proposal，不改 global state。 |
+| 檢查 conflict | 目前靠 route order 自然吸收衝突。 | 先算 touched-edge set / bounding box，做 conflict coloring 或 batching。 |
+| commit | 每條 net 找完路立即 remove/insert。 | 用 deterministic serial commit，commit 前再次檢查 overflow 是否真的改善。 |
+| fallback | 目前失敗就走原本 maze / post-processing path。 | batch 失效時回到 sequential reroute，避免破壞 legality。 |
+
+這也是為什麼文獻裡的 parallel global router 通常不是把原本 loop 直接加
+`OpenMP`，而是設計 collision-aware / negotiation-based parallel routing。
+
+## 投影片 5 - Amdahl's law：可平行化比例有多小
 
 Amdahl's law：
 
@@ -82,7 +122,7 @@ code line-by-line 的精準比例。即使如此，上限仍只有約 `1.014x` �
 > path 的 effective parallel fraction 只有幾個百分點。所以真正要接近多核加速，
 > 需要改成 batch route proposals，而不是只平行化現有 analysis kernels。
 
-## 投影片 4 - 方法地圖
+## 投影片 6 - 方法地圖
 
 | 方法 | 目標 | 結果 |
 | --- | --- | --- |
@@ -96,7 +136,7 @@ code line-by-line 的精準比例。即使如此，上限仍只有約 `1.014x` �
 | `CUDA` scoring | candidate / maze scoring | sub-kernel 正確且快，end-to-end 弱。 |
 | Strict / bounded maze | 控制 `overflow` / `WL` | rejected 或 opt-in only。 |
 
-## 投影片 5 - Fast layer 實作
+## 投影片 7 - Fast layer 實作
 
 Layer assignment dispatcher 只有在環境變數打開時才走 fast path：
 
@@ -117,7 +157,7 @@ if (std::getenv("NTHU_FAST_GREEDY_LAYER") != nullptr) {
 - net-guided low-layer `WL<=1.2` legal7 portfolio：`1.961x`，avg/worst `WL`
   `1.125/1.163`。
 
-## 投影片 6 - Net-guided low-layer assignment
+## 投影片 8 - Net-guided low-layer assignment
 
 核心想法：
 
@@ -140,7 +180,7 @@ NTHU_NET_GUIDED_LOW_LAYER_FIRST=1
 - net-guided assignment 讓同一個 net 比較連續，減少 via 和 `WL` 成長；
 - 這是把早期 fast layer 從「很快但品質差」修成「仍快且品質可控」的關鍵。
 
-## 投影片 7 - Adaptive repair 實作
+## 投影片 9 - Adaptive repair 實作
 
 核心想法：
 
@@ -167,7 +207,7 @@ NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
 - requested12 clean run：`1.345x`，`WL` avg/worst `1.158/1.284`，
   `10/12` legal，total `overflow=166`。
 
-## 投影片 8 - Edge-count post-processing
+## 投影片 10 - Edge-count post-processing
 
 核心想法：
 
@@ -186,7 +226,7 @@ NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
 > 如果少做 repair，router 可以很快；真正困難的是在不留下 `overflow` 的情況下
 > 少做 repair。
 
-## 投影片 9 - 多核與 CUDA 的實驗教訓
+## 投影片 11 - 多核與 CUDA 的實驗教訓
 
 `OpenMP`：
 
@@ -207,7 +247,7 @@ NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
 > 目前這種直接 shared-state parallel reroute 或小 kernel offload，無法有效改善
 > end-to-end runtime。
 
-## 投影片 10 - Bounded-length 診斷
+## 投影片 12 - Bounded-length 診斷
 
 目標：
 
@@ -229,7 +269,7 @@ NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
 - 但 A2 慢 `2.557x`，A4 慢 `6.039x`；
 - 因此 final disabled，只保留 opt-in。
 
-## 投影片 11 - 保留與拒絕的方向
+## 投影片 13 - 保留與拒絕的方向
 
 Final 保留：
 
