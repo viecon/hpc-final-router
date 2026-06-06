@@ -246,3 +246,35 @@ Next validation:
 - Run the original-legal guard set with the same config.
 - If all original-legal cases stay legal and the aggregate speedup remains
   above `prev_final`, then run requested12.
+
+## Guard Expansion: original-legal legal7
+
+Helper:
+
+```text
+scripts/run_vm_aggressive_guard.sh
+```
+
+Purpose:
+
+- validate the promising `frontier_edgecount_netguided_v2` smoke winner on the
+  original-legal subset before running the full requested benchmark set;
+- preserve one config across all rows, with no benchmark-specific switching;
+- compare every row against the original NTHU runtime and WL denominator;
+- record suite-level speedup using total original seconds divided by total
+  candidate seconds.
+
+Initial guard set:
+
+| Role | Benchmarks |
+| --- | --- |
+| `legal7` | `adaptec1`, `adaptec3`, `adaptec4`, `adaptec5`, `bigblue1`, `newblue2`, `newblue6` |
+
+Acceptance for this guard:
+
+- every row must keep `total_overflow=0` and `max_overflow=0`;
+- no per-benchmark hardcode is allowed;
+- if a row is slower than original by more than 3x, kill that run and classify
+  the issue as support/implementation vs invalid optimization logic;
+- if legal and faster than `prev_final` on aggregate, expand to the requested
+  benchmark set.
