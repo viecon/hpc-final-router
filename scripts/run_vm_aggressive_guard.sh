@@ -24,8 +24,13 @@ adaptec1.capo70.3d.35.50.90,legal7,441.962666,1326,5363235,0,0
 adaptec3.dragon70.3d.30.50.90,legal7,479.186273,1438,13158101,0,0
 adaptec4.aplace60.3d.30.50.90,legal7,130.666544,392,12207270,0,0
 adaptec5.mfar50.3d.50.20.100,legal7,1240.592120,3722,15535357,0,0
+adaptec2.mpl60.3d.35.20.100,original_overflow,173.992000,522,4857976,958172,2
 bigblue1.capo60.3d.50.10.100,legal7,1206.306768,3619,5575865,0,0
+bigblue2.mpl60.3d.40.60.60,original_overflow,1020.139000,3061,7886236,1928338,2
+bigblue3.aplace70.3d.50.10.90.m8,original_overflow,907.876000,2724,12282111,1724140,2
+newblue1.ntup50.3d.30.50.90,original_overflow,1043.267000,3130,4077044,839522,2
 newblue2.fastplace90.3d.50.20.100,legal7,76.516170,230,7595602,0,0
+newblue5.ntup50.3d.40.10.100,original_overflow,2296.878000,6891,21540842,3427158,2
 newblue6.mfar80.3d.60.10.100,legal7,3278.214429,9835,17683846,0,0
 CSV
 
@@ -47,8 +52,24 @@ case "$BENCH_SET" in
       newblue6.mfar80.3d.60.10.100.gr
     )
     ;;
+  requested12|current12)
+    benches=(
+      adaptec1.capo70.3d.35.50.90.gr
+      adaptec2.mpl60.3d.35.20.100.gr
+      adaptec3.dragon70.3d.30.50.90.gr
+      adaptec4.aplace60.3d.30.50.90.gr
+      adaptec5.mfar50.3d.50.20.100.gr
+      bigblue1.capo60.3d.50.10.100.gr
+      bigblue2.mpl60.3d.40.60.60.gr
+      bigblue3.aplace70.3d.50.10.90.m8.gr
+      newblue1.ntup50.3d.30.50.90.gr
+      newblue2.fastplace90.3d.50.20.100.gr
+      newblue5.ntup50.3d.40.10.100.gr
+      newblue6.mfar80.3d.60.10.100.gr
+    )
+    ;;
   *)
-    echo "unknown BENCH_SET=$BENCH_SET" >&2
+    echo "unknown BENCH_SET=$BENCH_SET; use legal7 or requested12" >&2
     exit 2
     ;;
 esac
@@ -201,6 +222,10 @@ with (root / "summary.csv").open(newline="", encoding="utf-8") as f:
         row["role"] = base["role"]
         row["original_seconds"] = f"{original_seconds:.6f}"
         row["kill_after_seconds"] = base["kill_after_seconds"]
+        row["original_overflow"] = base["original_overflow"]
+        row["original_max_overflow"] = base["original_max_overflow"]
+        original_legal = base["original_overflow"] == "0" and base["original_max_overflow"] == "0"
+        row["original_legal"] = original_legal
         try:
             seconds = float(row["seconds"])
             row["speedup_vs_original"] = f"{original_seconds / seconds:.6f}"
@@ -213,9 +238,10 @@ with (root / "summary.csv").open(newline="", encoding="utf-8") as f:
             row["wl_ratio_vs_original"] = f"{wl / original_wl:.6f}"
         except Exception:
             row["wl_ratio_vs_original"] = "NA"
-        row["passes_original_legal_guard"] = (
+        row["candidate_legal"] = (
             row["status"] == "ok" and row["total_overflow"] == "0" and row["max_overflow"] == "0"
         )
+        row["passes_original_legal_guard"] = (not original_legal) or row["candidate_legal"]
         row["timed_out"] = row["status"] == "timeout"
         rows.append(row)
 
@@ -231,10 +257,14 @@ fieldnames = [
     "total_wirelength",
     "original_wl",
     "wl_ratio_vs_original",
+    "original_overflow",
+    "original_max_overflow",
+    "original_legal",
     "total_overflow",
     "max_overflow",
     "overflowed_nets",
     "overflowed_edges",
+    "candidate_legal",
     "passes_original_legal_guard",
     "timed_out",
     "output",
@@ -246,11 +276,16 @@ with (root / "summary_with_baseline.csv").open("w", newline="", encoding="utf-8"
 
 total_original = sum(float(row["original_seconds"]) for row in rows)
 total_seconds = sum(float(row["seconds"]) for row in rows if row["seconds"] not in ("NA", ""))
-legal = sum(1 for row in rows if row["passes_original_legal_guard"])
+legal = sum(1 for row in rows if row["candidate_legal"])
+original_legal_rows = sum(1 for row in rows if row["original_legal"])
+original_legal_pass = sum(1 for row in rows if row["original_legal"] and row["candidate_legal"])
+guard_pass = sum(1 for row in rows if row["passes_original_legal_guard"])
 timeouts = sum(1 for row in rows if row["timed_out"])
 with (root / "aggregate.txt").open("w", encoding="utf-8") as f:
     f.write(f"rows={len(rows)}\n")
     f.write(f"legal={legal}/{len(rows)}\n")
+    f.write(f"original_legal_guard={original_legal_pass}/{original_legal_rows}\n")
+    f.write(f"guard_pass={guard_pass}/{len(rows)}\n")
     f.write(f"timeouts={timeouts}\n")
     f.write(f"original_seconds={total_original:.6f}\n")
     f.write(f"candidate_seconds={total_seconds:.6f}\n")

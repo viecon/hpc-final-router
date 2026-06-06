@@ -271,11 +271,20 @@ Initial guard set:
 | --- | --- |
 | `legal7` | `adaptec1`, `adaptec3`, `adaptec4`, `adaptec5`, `bigblue1`, `newblue2`, `newblue6` |
 
+Expansion set after `legal7` passes:
+
+| Role | Benchmarks |
+| --- | --- |
+| `requested12` | `adaptec1-5`, `bigblue1-3`, `newblue1`, `newblue2`, `newblue5`, `newblue6` |
+
 Acceptance for this guard:
 
-- every row must keep `total_overflow=0` and `max_overflow=0`;
+- for `legal7`, every row must keep `total_overflow=0` and
+  `max_overflow=0`;
 - no per-benchmark hardcode is allowed;
 - if a row is slower than original by more than 3x, kill that run and classify
   the issue as support/implementation vs invalid optimization logic;
-- if legal and faster than `prev_final` on aggregate, expand to the requested
-  benchmark set.
+- for `requested12`, the strict correctness gate is that all originally legal
+  rows remain legal; original-overflow rows are reported separately;
+- if `legal7` is legal and faster than `prev_final` on aggregate, expand to the
+  requested benchmark set.
