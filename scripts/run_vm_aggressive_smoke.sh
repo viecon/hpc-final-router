@@ -14,7 +14,7 @@ SKIP_BUILD=${SKIP_BUILD:-1}
 JOBS=${JOBS:-14}
 PARALLEL_BENCH_JOBS=${PARALLEL_BENCH_JOBS:-1}
 ROUTER_THREADS=${ROUTER_THREADS:-1}
-RUN_STRATEGIES=${RUN_STRATEGIES:-prev_final aggressive_p3lite_v1}
+RUN_STRATEGIES=${RUN_STRATEGIES:-prev_final aggressive_p3lite_v1 aggressive_p3lite_v2_postonly}
 
 COMMON_ARGS=${COMMON_ARGS:-"--p2-init-box-size=5 --p2-box-expand-size=5 --p2-max-iteration=6 --overflow-threshold=1800 --p3-max-iteration=24 --p3-init-box-size=80 --p3-box-expand-size=140"}
 
@@ -30,6 +30,7 @@ cat > "$RESULT_ROOT/strategy_catalog.csv" <<'CSV'
 strategy,previous_strategy,optimization_logic,reference
 prev_final,,final high-overflow adaptive P2 budget from reports/03-final-vm-strategy-results.md,internal prior result
 aggressive_p3lite_v1,prev_final,aggressively reduce initial/repair P3 effort while keeping routing-state adaptive repair; tests whether early deep P3 was the bottleneck,internal follow-up; no new paper claim
+aggressive_p3lite_v2_postonly,aggressive_p3lite_v1,same P3-lite logic but route tiny residual overflow through post-only repair before P2 repair; fixes v1 support issue where 3-4 overflow entered P2,internal follow-up; no new paper claim
 CSV
 
 {
@@ -162,6 +163,31 @@ if strategy_enabled aggressive_p3lite_v1; then
   )
   run_one aggressive_p3lite_v1 easy newblue2.fastplace90.3d.50.20.100 230 "${common_candidate[@]}"
   run_one aggressive_p3lite_v1 hard adaptec4.aplace60.3d.30.50.90 392 "${common_candidate[@]}"
+fi
+
+if strategy_enabled aggressive_p3lite_v2_postonly; then
+  common_candidate=(
+    NTHU_FAST_GREEDY_LAYER=1
+    NTHU_FAST_GREEDY_LAYER_NET_GUIDED=1
+    NTHU_NET_GUIDED_LOW_LAYER_FIRST=1
+    NTHU_ADAPTIVE_LEGAL_REPAIR=1
+    NTHU_ADAPTIVE_POST_ONLY_OVERFLOW_LIMIT=10
+    NTHU_ADAPTIVE_REPAIR_P2_MAX_ITER=8
+    NTHU_ADAPTIVE_HIGH_OVERFLOW_P2_TRIGGER=200
+    NTHU_ADAPTIVE_HIGH_OVERFLOW_P2_MAX_ITER=16
+    NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_LIMIT=50
+    NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
+    NTHU_ADAPTIVE_INITIAL_P3_MAX_ITER=1
+    NTHU_ADAPTIVE_INITIAL_P3_INIT_BOX=54
+    NTHU_ADAPTIVE_INITIAL_P3_BOX_INC=88
+    NTHU_ADAPTIVE_REPAIR_P3_MAX_ITER=4
+    NTHU_ADAPTIVE_REPAIR_P3_INIT_BOX=66
+    NTHU_ADAPTIVE_REPAIR_P3_BOX_INC=122
+    NTHU_POST_SORT_MODE=edge_count
+    NTHU_POST_OVERFLOW_LIMIT_AFTER_FIRST=80
+  )
+  run_one aggressive_p3lite_v2_postonly easy newblue2.fastplace90.3d.50.20.100 230 "${common_candidate[@]}"
+  run_one aggressive_p3lite_v2_postonly hard adaptec4.aplace60.3d.30.50.90 392 "${common_candidate[@]}"
 fi
 
 python3 - "$RESULT_ROOT" <<'PY'

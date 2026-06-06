@@ -109,3 +109,36 @@ logic.
 
 No new paper claim is attached to this candidate. It is an aggressive extension
 of the already documented adaptive-budget direction.
+
+### VM Smoke Result
+
+Result root:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/aggr_p3lite_v1_2ea6819_
+```
+
+| Strategy | Role | Benchmark | Seconds | Speedup vs original | WL ratio | Overflow |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `prev_final` | easy | `newblue2` | 46.957 | 1.629x | 1.151 | 0 / 0 |
+| `aggressive_p3lite_v1` | easy | `newblue2` | 48.587 | 1.575x | 1.151 | 0 / 0 |
+| `prev_final` | hard | `adaptec4` | 104.147 | 1.255x | 1.110 | 0 / 0 |
+| `aggressive_p3lite_v1` | hard | `adaptec4` | 111.058 | 1.177x | 1.109 | 0 / 0 |
+
+Classification:
+
+- Not a 3x slowdown; no timeout.
+- Not an implementation crash.
+- This is a support-policy issue inside the same optimization family.
+
+Reason:
+
+- Reducing first P3 to one round left only small residual overflow:
+  `newblue2` left 4 and `adaptec4` left 3.
+- The adaptive repair path then entered P2 repair and ran a second
+  post-processing pass, which cost more than the saved first P3 work.
+
+Follow-up:
+
+- Test `aggressive_p3lite_v2_postonly`: for tiny residual overflow, run
+  post-only repair before P2 repair.
