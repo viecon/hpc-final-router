@@ -215,3 +215,34 @@ Follow-up:
   to the same short-P3 frontier.  If it retains most of the speed while reducing
   WL, it becomes a promising direction.  If it loses most speed, the frontier is
   mainly a fast-layer quality tradeoff.
+
+## Follow-Up Candidate: `frontier_edgecount_netguided_v2`
+
+Result root:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_netguided_aeeeb0e_20260606T205340Z
+```
+
+| Strategy | Role | Benchmark | Seconds | Speedup vs original | WL ratio | Overflow |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `frontier_edgecount_netguided_v2` | easy | `newblue2` | 41.536 | 1.842x | 1.159 | 0 / 0 |
+| `frontier_edgecount_netguided_v2` | hard | `adaptec4` | 90.302 | 1.447x | 1.110 | 0 / 0 |
+
+Against `prev_final` in the same smoke family:
+
+- `newblue2`: 41.536s vs 46.957s, about 1.13x faster.
+- `adaptec4`: 90.302s vs 104.147s, about 1.15x faster.
+
+Classification:
+
+- This fixes the v1 WL support problem without losing the speed gain.
+- It passed the easy/hard smoke and did not trigger the 3x kill gate.
+- This is the first candidate in this aggressive pass worth expanding to a
+  larger guard set.
+
+Next validation:
+
+- Run the original-legal guard set with the same config.
+- If all original-legal cases stay legal and the aggregate speedup remains
+  above `prev_final`, then run requested12.
