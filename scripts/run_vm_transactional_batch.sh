@@ -34,6 +34,20 @@ if [[ -z "$PARALLEL_BENCH_JOBS" ]]; then
     PARALLEL_BENCH_JOBS=1
   fi
 fi
+if [[ -z "${OMP_PROC_BIND:-}" ]]; then
+  if (( PARALLEL_BENCH_JOBS > 1 && ROUTER_THREADS == 1 )); then
+    OMP_PROC_BIND=false
+  else
+    OMP_PROC_BIND=close
+  fi
+fi
+if [[ -z "${OMP_PLACES:-}" ]]; then
+  if [[ "$OMP_PROC_BIND" == "false" || "$OMP_PROC_BIND" == "FALSE" || "$OMP_PROC_BIND" == "0" ]]; then
+    OMP_PLACES=
+  else
+    OMP_PLACES=cores
+  fi
+fi
 
 ALL16_BENCHES=(
   adaptec1.capo70.3d.35.50.90.gr
@@ -114,6 +128,8 @@ SOURCE_BRANCH=$(git branch --show-current)
   echo "max_router_cores=$MAX_ROUTER_CORES"
   echo "router_threads=$ROUTER_THREADS"
   echo "parallel_bench_jobs=$PARALLEL_BENCH_JOBS"
+  echo "omp_proc_bind=$OMP_PROC_BIND"
+  echo "omp_places=${OMP_PLACES:-unset}"
   echo "router_label=$ROUTER_LABEL"
   echo "nthu_dir=$NTHU_DIR"
   echo "build_dir=$BUILD_DIR"
@@ -146,8 +162,12 @@ SOURCE_BRANCH=$(git branch --show-current)
 } > "$RESULT_DIR/log_index.csv"
 
 export OMP_NUM_THREADS="$ROUTER_THREADS"
-export OMP_PROC_BIND=${OMP_PROC_BIND:-close}
-export OMP_PLACES=${OMP_PLACES:-cores}
+export OMP_PROC_BIND
+if [[ -n "$OMP_PLACES" ]]; then
+  export OMP_PLACES
+else
+  unset OMP_PLACES
+fi
 export NTHU_TRANSACTIONAL_REROUTE_BATCHES=${NTHU_TRANSACTIONAL_REROUTE_BATCHES:-1}
 export NTHU_TRANSACTIONAL_BATCH_LIMIT=${NTHU_TRANSACTIONAL_BATCH_LIMIT:-$MAX_ROUTER_CORES}
 export NTHU_TRANSACTIONAL_PROPOSAL_WAVE_BATCHES=${NTHU_TRANSACTIONAL_PROPOSAL_WAVE_BATCHES:-16}
