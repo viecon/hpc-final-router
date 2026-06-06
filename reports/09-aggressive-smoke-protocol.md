@@ -247,16 +247,34 @@ Next validation:
 - If all original-legal cases stay legal and the aggregate speedup remains
   above `prev_final`, then run requested12.
 
-### Legal7 Guard Early Classification
+### Legal7 Guard Result
 
-The legal7 expansion exposed a legality failure that the easy/hard smoke did not
-cover:
+Result root:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_netguided_legal7_8bec14a_20260606T230807Z
+```
+
+The legal7 expansion exposed a legality failure that the easy/hard smoke did
+not cover:
 
 | Benchmark | Status | Overflow / Max | Classification |
 | --- | --- | ---: | --- |
 | `adaptec1` | `ok` | `1212 / 6` | original-legal guard failure |
 | `adaptec3` | `ok` | `10 / 2` | original-legal guard failure |
+| `adaptec5` | `ok` | `4888 / 10` | original-legal guard failure |
 | `bigblue1` | `ok` | `3882 / 8` | original-legal guard failure |
+| `newblue6` | `ok` | `4484 / 10` | original-legal guard failure |
+
+Aggregate:
+
+| Metric | Value |
+| --- | ---: |
+| Legal rows | `2 / 7` |
+| Timeouts | `0` |
+| Original seconds | `6853.445` |
+| Candidate seconds | `1702.490` |
+| Suite speedup | `4.026x` |
 
 This is not a timeout and not a crash.  The issue is that
 `frontier_edgecount_netguided_v2` is a runtime-frontier config: it keeps the fast
@@ -283,6 +301,87 @@ Classification rule:
   inside the frontier family.
 - If v3 is still illegal or slower than the 3x gate, this frontier family is
   rejected as an overall candidate and kept only as runtime-frontier evidence.
+
+### v3 Smoke Result
+
+Result root:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_adaptive_v3_5c00905_20260606T231748Z
+```
+
+| Strategy | Role | Benchmark | Seconds | Speedup vs original | WL ratio | Overflow |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `frontier_netguided_adaptive_repair_v3` | easy | `newblue2` | 41.183 | 1.858x | 1.159 | 0 / 0 |
+| `frontier_netguided_adaptive_repair_v3` | hard | `adaptec4` | 89.239 | 1.464x | 1.110 | 0 / 0 |
+
+Classification:
+
+- The v3 support change did not slow the smoke pair; both rows are slightly
+  faster than v2 smoke and remain legal.
+- No timeout occurred.
+- Next validation is the same legal7 guard that rejected v2.
+
+### v3 Legal7 Guard Result
+
+Result root:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_adaptive_v3_legal7_5c00905_20260606T232340Z
+```
+
+| Benchmark | Seconds | Speedup vs original | WL ratio | Overflow |
+| --- | ---: | ---: | ---: | ---: |
+| `adaptec1` | 325.665 | 1.357x | 1.145 | 2 / 2 |
+| `adaptec3` | 292.554 | 1.638x | 1.130 | 0 / 0 |
+| `adaptec4` | 100.797 | 1.296x | 1.110 | 0 / 0 |
+| `adaptec5` | 698.291 | 1.777x | 1.114 | 0 / 0 |
+| `bigblue1` | 534.539 | 2.257x | 1.134 | 0 / 0 |
+| `newblue2` | 49.200 | 1.555x | 1.159 | 0 / 0 |
+| `newblue6` | 911.106 | 3.598x | 1.110 | 152 / 4 |
+
+Aggregate:
+
+| Metric | Value |
+| --- | ---: |
+| Legal rows | `5 / 7` |
+| Original-legal guard | `5 / 7` |
+| Timeouts | `0` |
+| Original seconds | `6853.445` |
+| Candidate seconds | `2912.151` |
+| Suite speedup | `2.353x` |
+
+Classification:
+
+- v3 fixed most of v2's legal7 failures and improved legal7 speed vs
+  `prev_final` (`2.353x` vs `1.752x` against original), but it is not acceptable
+  because all original-legal rows must remain legal.
+- A1 and N6 are low-residual failures.  Logs show A1 reached final full
+  remainder repair with `cal max overflow=1`, and N6 hit the post candidate
+  limit `routed=80 limit=80` while still at small residual overflow.
+- This is a support-policy issue in the same frontier family, not a crash or a
+  3x slowdown.
+
+Follow-up candidate:
+
+```text
+frontier_adaptive_late_score1_v4
+```
+
+v4 change:
+
+- keep v3's overall strategy;
+- lower late P2 reroute score gate from `4` to `1`;
+- increase post overflow candidate limit after the first post round from `80`
+  to `240`;
+- increase final full-remainder repair from `limit=20, rounds=2` to
+  `limit=80, rounds=6`.
+
+Hypothesis:
+
+The remaining failures are low-overflow residuals, so allowing low-score late
+reroutes and more post candidates should restore legality with less cost than
+returning to the heavier `prev_final` P3 budget.
 
 ## Guard Expansion: original-legal legal7
 

@@ -14,7 +14,7 @@ SKIP_BUILD=${SKIP_BUILD:-1}
 JOBS=${JOBS:-14}
 PARALLEL_BENCH_JOBS=${PARALLEL_BENCH_JOBS:-1}
 ROUTER_THREADS=${ROUTER_THREADS:-1}
-RUN_STRATEGIES=${RUN_STRATEGIES:-prev_final aggressive_p3lite_v1 aggressive_p3lite_v2_postonly frontier_edgecount_shortp3_v1 frontier_edgecount_netguided_v2 frontier_netguided_adaptive_repair_v3}
+RUN_STRATEGIES=${RUN_STRATEGIES:-prev_final aggressive_p3lite_v1 aggressive_p3lite_v2_postonly frontier_edgecount_shortp3_v1 frontier_edgecount_netguided_v2 frontier_netguided_adaptive_repair_v3 frontier_adaptive_late_score1_v4}
 
 COMMON_ARGS=${COMMON_ARGS:-"--p2-init-box-size=5 --p2-box-expand-size=5 --p2-max-iteration=6 --overflow-threshold=1800 --p3-max-iteration=24 --p3-init-box-size=80 --p3-box-expand-size=140"}
 
@@ -34,6 +34,7 @@ aggressive_p3lite_v2_postonly,aggressive_p3lite_v1,same P3-lite logic but route 
 frontier_edgecount_shortp3_v1,prev_final,aggressive runtime frontier using dogleg fast path range-skip edge-count post ordering and short P3 budget; expected to expose speed/legality tradeoff,internal frontier follow-up; no new paper claim
 frontier_edgecount_netguided_v2,frontier_edgecount_shortp3_v1,same short-P3 edge-count frontier plus net-guided low-layer assignment to control WL,internal frontier follow-up; no new paper claim
 frontier_netguided_adaptive_repair_v3,frontier_edgecount_netguided_v2,same fast frontier but restores routing-state adaptive legal repair when measured overflow remains after post-processing,internal legality repair follow-up; no new paper claim
+frontier_adaptive_late_score1_v4,frontier_netguided_adaptive_repair_v3,same adaptive frontier but allows late P2 repair to reroute score-1 residual overflow and gives final full-remainder repair more rounds,internal legality repair follow-up; no new paper claim
 CSV
 
 {
@@ -272,6 +273,43 @@ if strategy_enabled frontier_netguided_adaptive_repair_v3; then
   )
   run_one frontier_netguided_adaptive_repair_v3 easy newblue2.fastplace90.3d.50.20.100 230 "$frontier_args" "${common_candidate[@]}"
   run_one frontier_netguided_adaptive_repair_v3 hard adaptec4.aplace60.3d.30.50.90 392 "$frontier_args" "${common_candidate[@]}"
+fi
+
+if strategy_enabled frontier_adaptive_late_score1_v4; then
+  frontier_args="--p2-init-box-size=5 --p2-box-expand-size=5 --overflow-threshold=10000 --p2-max-iteration=5 --p3-max-iteration=2 --p3-init-box-size=54 --p3-box-expand-size=88"
+  common_candidate=(
+    NTHU_FAST_GREEDY_LAYER=1
+    NTHU_FAST_GREEDY_LAYER_NET_GUIDED=1
+    NTHU_NET_GUIDED_LOW_LAYER_FIRST=1
+    NTHU_DOGLEG_FASTPATH=1
+    NTHU_DOGLEG_MAX_EXTRA=0
+    NTHU_DOGLEG_MIN_SCORE=1
+    NTHU_DOGLEG_STEP=8
+    NTHU_RANGE_SKIP_REMAINDER=1
+    NTHU_REROUTE_SCORE_P2_ONLY=1
+    NTHU_REROUTE_MIN_OVERFLOW_SCORE=5
+    NTHU_REROUTE_LATE_SCORE_AFTER_ITER=4
+    NTHU_REROUTE_LATE_MIN_OVERFLOW_SCORE=1
+    NTHU_POST_SORT_MODE=edge_count
+    NTHU_POST_OVERFLOW_LIMIT_AFTER_FIRST=240
+    NTHU_ADAPTIVE_LEGAL_REPAIR=1
+    NTHU_ADAPTIVE_POST_ONLY_OVERFLOW_LIMIT=10
+    NTHU_ADAPTIVE_REPAIR_P2_MAX_ITER=8
+    NTHU_ADAPTIVE_HIGH_OVERFLOW_P2_TRIGGER=200
+    NTHU_ADAPTIVE_HIGH_OVERFLOW_P2_MAX_ITER=16
+    NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_LIMIT=50
+    NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
+    NTHU_ADAPTIVE_INITIAL_P3_MAX_ITER=2
+    NTHU_ADAPTIVE_INITIAL_P3_INIT_BOX=54
+    NTHU_ADAPTIVE_INITIAL_P3_BOX_INC=88
+    NTHU_ADAPTIVE_REPAIR_P3_MAX_ITER=12
+    NTHU_ADAPTIVE_REPAIR_P3_INIT_BOX=66
+    NTHU_ADAPTIVE_REPAIR_P3_BOX_INC=122
+    NTHU_FINAL_FULL_REMAINDER_REPAIR_LIMIT=80
+    NTHU_FINAL_FULL_REMAINDER_REPAIR_ROUNDS=6
+  )
+  run_one frontier_adaptive_late_score1_v4 easy newblue2.fastplace90.3d.50.20.100 230 "$frontier_args" "${common_candidate[@]}"
+  run_one frontier_adaptive_late_score1_v4 hard adaptec4.aplace60.3d.30.50.90 392 "$frontier_args" "${common_candidate[@]}"
 fi
 
 python3 - "$RESULT_ROOT" <<'PY'
