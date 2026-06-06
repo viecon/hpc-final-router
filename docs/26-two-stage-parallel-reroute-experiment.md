@@ -25,6 +25,16 @@ only by:
 export NTHU_TWO_STAGE_PARALLEL_REROUTE=1
 ```
 
+It also has a stricter transactional experiment enabled by:
+
+```bash
+export NTHU_TRANSACTIONAL_REROUTE_BATCHES=1
+```
+
+The transactional path does not call serial `range_router()` as fallback. Workers
+propose local route transactions only; the main thread commits only transactions
+that still pass the final legality check. Failed transactions are skipped.
+
 The experiment splits overflow reroute into chunked two-stage rounds:
 
 | Stage | Parallel? | Global congestion mutation? | Work |
@@ -49,6 +59,36 @@ adjust multi-terminal tree state, so it is not safe to run in the proposal phase
 without a larger tree-transaction design.
 
 ## Environment Knobs
+
+### Transactional Reroute
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `NTHU_TRANSACTIONAL_REROUTE_BATCHES` | off | Enable conflict-graph transactional reroute. |
+| `NTHU_TRANSACTIONAL_BATCH_LIMIT` | OpenMP max threads | Max non-conflicting transactions per batch. |
+| `NTHU_TRANSACTIONAL_MAX_CANDIDATES` | unlimited | Cap overflow candidates; skipped candidates do not fall back. |
+| `NTHU_TRANSACTIONAL_LSHAPE` | on | Allow endpoint-stable L-shape transaction proposals. |
+| `NTHU_TRANSACTIONAL_DOGLEG` | on | Allow endpoint-stable dogleg transaction proposals. |
+| `NTHU_TRANSACTIONAL_STRICT_MAZE` | off | Allow endpoint-stable strict-capacity maze proposals in workers. |
+
+Safety model:
+
+- build a conflict graph with expanded reroute bounding boxes and same-net
+  exclusion;
+- each worker reads the current congestion snapshot and writes only local
+  `Two_pin_element_2d` copies plus thread-local `MonotonicRouting` scratch;
+- shared `congestion`, `NetDirtyBit`, and real twopin paths are touched only in
+  the deterministic commit loop;
+- commit re-checks `check_path_no_overflow(candidate_path, net_id, true)` before
+  remove/insert;
+- no serial fallback is used. A rejected transaction leaves the old path in
+  place.
+
+The first safe version commits only endpoint-stable paths. This avoids mutating
+the shared multi-terminal maze tree from worker threads. Endpoint-changing maze
+transactions would need an additional net-tree transaction/merge layer.
+
+### Two-Stage Reroute
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
