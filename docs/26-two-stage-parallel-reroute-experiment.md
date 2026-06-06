@@ -243,9 +243,57 @@ Follow-up implementation after `de658dd`:
 - one reusable `MonotonicRouting` scratch object per OpenMP worker;
 - log `plan_ms` separately from `propose_ms` and `commit_ms`.
 
+Commit `fa8289d` result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_fa8289d_transactional_nomaze
+```
+
+| Variant | Router s | Avg CPU | Max CPU | WL | Overflow |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| transactional optimized conflict graph | 149.104 | 117.239% | 127.000% | 8878899 | 0 |
+
+This fixed the scratch rebuild cost but exposed exact conflict planning as the
+new serial bottleneck: representative `plan_ms` values were `13s` to `21s` per
+large reroute call.
+
+Commit `63881a3` changed the default scheduler to snapshot chunks and kept exact
+conflict graph only behind `NTHU_TRANSACTIONAL_CONFLICT_GRAPH=1`.
+
+Result roots:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_63881a3_transactional_chunk
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_63881a3_transactional_chunk_t1
+```
+
+| Variant | Threads | Router s | Avg CPU | Max CPU | WL | Overflow |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| transactional chunk | 1 | 60.509 | 95.291% | 107.000% | 8875858 | 0 |
+| transactional chunk | 14 | 53.188 | 136.692% | 182.000% | 8876316 | 0 |
+
+Thread scaling for the safe no-fallback transaction path is `60.509 / 53.188 =
+1.138x`. It is real parallelism, but not enough to beat the baseline OpenMP14 row
+(`43.849s`). The reason is that safe transaction proposal is now cheap:
+
+```text
+first large transactional chunk call:
+transaction_candidates=161038
+batches=11503
+scheduler=chunk
+plan_ms=31.301
+propose_ms=246.786
+commit_ms=140.775
+fallback=0
+```
+
+The remaining wall time is dominated by the unchanged range query/candidate build
+path and by extra iterations caused by low no-fallback transaction coverage.
+
 ## Status
 
 The branch is useful as a diagnostic experiment, not yet a final router
-strategy. `de658dd` proves the no-fallback transaction path can safely use
-multiple cores, but it needs a lower-overhead scheduler and better transaction
-coverage before it can be competitive.
+strategy. `63881a3` is the cleanest safe version: no fallback, deterministic
+commit, legal on `newblue2`, and measurable 1-thread to 14-thread speedup. It is
+still slower than the selected baseline because endpoint-stable cheap
+transactions do not cover enough hard reroutes.
