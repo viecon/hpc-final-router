@@ -329,7 +329,7 @@ int transactional_strict_maze_max_area() {
 int transactional_proposal_wave_batches() {
     const char* value = std::getenv("NTHU_TRANSACTIONAL_PROPOSAL_WAVE_BATCHES");
     if (value == nullptr || *value == '\0') {
-        return 64;
+        return 16;
     }
     return std::max(1, std::atoi(value));
 }

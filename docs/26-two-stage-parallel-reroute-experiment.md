@@ -42,21 +42,28 @@ The experiment splits overflow reroute into chunked two-stage rounds:
 | Proposal | Yes, OpenMP per-thread scratch | No | Copy each overflow `Two_pin_element_2d`, try L-shape/dogleg/monotonic candidates against the current congestion snapshot, and keep only zero-overflow candidate paths. |
 | Commit | No, deterministic serial order | Yes | Re-check the proposed path against the latest congestion, rip up the old path, update the twopin path, and insert the new path. |
 
-All overflow candidates are processed through proposal chunks. The chunk cap only
-limits proposal working-set size; it no longer sends the remaining tail directly
-to serial routing. Serial `range_router()` is reserved for proposal failures or
-commit-time conflicts, and by default those failures are queued until all proposal
-chunks have completed. This prevents serial fallback from being interleaved with
-the parallel proposal phase.
+The transactional variant now also has a hard-reroute proposal path: an
+endpoint-stable strict-capacity maze search inside a bounded local box. It is
+still a transaction proposal, not a fallback. The worker only returns a candidate
+path; the deterministic commit loop still performs the final capacity check
+before mutating global congestion.
+
+In the older two-stage path, all overflow candidates are processed through
+proposal chunks. The chunk cap only limits proposal working-set size; it no
+longer sends the remaining tail directly to serial routing. Serial
+`range_router()` is reserved for proposal failures or commit-time conflicts, and
+by default those failures are queued until all proposal chunks have completed.
+This prevents serial fallback from being interleaved with the parallel proposal
+phase.
 
 The log line reports separate `proposal_ms`, `commit_ms`, and `fallback_ms`
 fields. These are the numbers to use for Amdahl-style analysis; total CPU
 utilization alone is misleading because correctness verification and serial
 fallback are single-core.
 
-Maze reroute remains serial fallback. This is intentional: the maze path can
-adjust multi-terminal tree state, so it is not safe to run in the proposal phase
-without a larger tree-transaction design.
+The old two-stage path still uses serial fallback for unresolved candidates. The
+transactional path does not: failed, stale, or commit-rejected transactions leave
+the old path in place.
 
 ## Environment Knobs
 
@@ -69,7 +76,9 @@ without a larger tree-transaction design.
 | `NTHU_TRANSACTIONAL_MAX_CANDIDATES` | unlimited | Cap overflow candidates; skipped candidates do not fall back. |
 | `NTHU_TRANSACTIONAL_LSHAPE` | on | Allow endpoint-stable L-shape transaction proposals. |
 | `NTHU_TRANSACTIONAL_DOGLEG` | on | Allow endpoint-stable dogleg transaction proposals. |
-| `NTHU_TRANSACTIONAL_STRICT_MAZE` | off | Allow endpoint-stable strict-capacity maze proposals in workers. |
+| `NTHU_TRANSACTIONAL_STRICT_MAZE` | on | Allow endpoint-stable strict-capacity maze proposals in workers. Set `0` to disable. |
+| `NTHU_TRANSACTIONAL_STRICT_MAZE_MAX_AREA` | 4096 | Max local search area for transactional strict maze. Falls back to `NTHU_STRICT_LEGAL_MAZE_MAX_AREA` if set. |
+| `NTHU_TRANSACTIONAL_PROPOSAL_WAVE_BATCHES` | 16 | Number of deterministic batches proposed in one OpenMP wave before serial commit. |
 
 Safety model:
 
@@ -290,10 +299,90 @@ fallback=0
 The remaining wall time is dominated by the unchanged range query/candidate build
 path and by extra iterations caused by low no-fallback transaction coverage.
 
-## Status
+## Hard-Reroute Strict Maze
 
-The branch is useful as a diagnostic experiment, not yet a final router
-strategy. `63881a3` is the cleanest safe version: no fallback, deterministic
-commit, legal on `newblue2`, and measurable 1-thread to 14-thread speedup. It is
-still slower than the selected baseline because endpoint-stable cheap
-transactions do not cover enough hard reroutes.
+Commit `9c13b54` made endpoint-stable strict-capacity maze proposals the default
+inside transactional reroute. This is the first no-fallback transactional version
+that solves the hard-reroute coverage problem on `newblue2`.
+
+Earlier `63881a3` code with the same behavior enabled by env:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_63881a3_transactional_strictmaze4096
+```
+
+| Variant | Router s | Avg CPU | Max CPU | Live threads avg/max | WL | Overflow |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| transactional strict maze area 4096 | 38.541 | 146.122% | 224.000% | 8.973 / 14 | 8845493 | 0 |
+
+Same-runner comparison after making strict maze the default:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_9c13b54_no_transaction_same_runner
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_9c13b54_transactional_nomaze_same_runner
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_9c13b54_transactional_strictmaze_default
+```
+
+| Variant | Router s | WL | Overflow | Notes |
+| --- | ---: | ---: | ---: | --- |
+| no transaction | 53.122 | 7608823 | 0 | Same OpenMP build and arguments; transactional env off. |
+| transactional no-maze | 68.475 | 7741966 | 0 | No fallback, but cheap proposals do not cover hard reroutes. |
+| transactional strict maze default | 47.281 | 7716274 | 0 | No fallback; strict maze default area 4096. |
+
+Strict maze changes the first large transactional call from mostly invalid cheap
+proposals to useful hard-reroute proposals:
+
+```text
+no-maze:     proposed=18352 committed=8732 invalid=142692 commit_rejected=68
+strict maze: proposed=127297 committed=12339 invalid=33763 commit_rejected=314
+```
+
+It also reduces the number of transactional calls on this case from 12 to 4 and
+cuts post-processing reroute time from about `20.3s` to about `2.7s`. The
+same-runner speedup over no transaction is `53.122 / 47.281 = 1.124x`; the WL
+ratio is `7716274 / 7608823 = 1.014x`.
+
+## Proposal Wave Parallelization
+
+Commit `3c1c0e4` changed proposal scheduling from one OpenMP parallel region per
+small deterministic batch to one region per wave of batches. Safety is unchanged:
+workers still read a snapshot and write only proposals; commit remains serial and
+rechecks capacity in deterministic order.
+
+Result roots:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_3c1c0e4_transactional_wave8
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_3c1c0e4_transactional_wave16
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_3c1c0e4_transactional_wave32
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_3c1c0e4_transactional_wave64_default
+```
+
+| Proposal wave batches | Router s | WL | Overflow | First-call `proposal_waves` | First-call `propose_ms` | First-call `commit_rejected` |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 (`9c13b54`) | 47.281 | 7716274 | 0 | 11505 | 1266.167 | 314 |
+| 8 | 46.740 | 7715496 | 0 | 1438 | 630.296 | 979 |
+| 16 | 46.598 | 7719284 | 0 | 719 | 575.773 | 1455 |
+| 32 | 48.364 | 7720576 | 0 | 360 | 653.563 | 2069 |
+| 64 | 48.316 | 7723366 | 0 | 180 | 675.350 | 3147 |
+
+Wave scheduling confirms the expected tradeoff. Larger waves reduce OpenMP
+parallel-region overhead, but stale proposals increase commit rejection. On this
+case wave 16 is the best measured balance, so it is the default after the latest
+code change.
+
+## Current Status
+
+The current branch is no longer just a diagnostic fallback experiment. The latest
+transactional path is:
+
+- no serial fallback;
+- strict-capacity hard-reroute proposals enabled by default;
+- deterministic commit with final capacity recheck;
+- wave-based OpenMP proposal scheduling, default wave size 16.
+
+On `newblue2` it is legal and improves same-runner time from `53.122s` to
+`46.598s` (`1.14x`) with WL about `1.015x` of the no-transaction row. The
+remaining limit is that only reroute proposal is parallelized; interval
+construction, candidate query/sort, final commit, post-processing bookkeeping,
+and 3D assignment still keep average CPU far below 14 full cores.
