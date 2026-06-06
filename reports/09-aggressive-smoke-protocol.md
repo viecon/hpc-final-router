@@ -261,8 +261,9 @@ Purpose:
   original-legal subset before running the full requested benchmark set;
 - preserve one config across all rows, with no benchmark-specific switching;
 - compare every row against the original NTHU runtime and WL denominator;
+- run each benchmark in its own log directory with a 3x-original timeout gate;
 - record suite-level speedup using total original seconds divided by total
-  candidate seconds.
+  candidate seconds, including timeout rows at their kill threshold.
 
 Initial guard set:
 

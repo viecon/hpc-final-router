@@ -19,15 +19,21 @@ JOBS=${JOBS:-14}
 mkdir -p "$RESULT_DIR"
 
 cat > "$RESULT_DIR/original_baseline.csv" <<'CSV'
-benchmark,role,original_seconds,original_wl,original_overflow,original_max_overflow
-adaptec1.capo70.3d.35.50.90,legal7,441.962666,5363235,0,0
-adaptec3.dragon70.3d.30.50.90,legal7,479.186273,13158101,0,0
-adaptec4.aplace60.3d.30.50.90,legal7,130.666544,12207270,0,0
-adaptec5.mfar50.3d.50.20.100,legal7,1240.592120,15535357,0,0
-bigblue1.capo60.3d.50.10.100,legal7,1206.306768,5575865,0,0
-newblue2.fastplace90.3d.50.20.100,legal7,76.516170,7595602,0,0
-newblue6.mfar80.3d.60.10.100,legal7,3278.214429,17683846,0,0
+benchmark,role,original_seconds,kill_after_seconds,original_wl,original_overflow,original_max_overflow
+adaptec1.capo70.3d.35.50.90,legal7,441.962666,1326,5363235,0,0
+adaptec3.dragon70.3d.30.50.90,legal7,479.186273,1438,13158101,0,0
+adaptec4.aplace60.3d.30.50.90,legal7,130.666544,392,12207270,0,0
+adaptec5.mfar50.3d.50.20.100,legal7,1240.592120,3722,15535357,0,0
+bigblue1.capo60.3d.50.10.100,legal7,1206.306768,3619,5575865,0,0
+newblue2.fastplace90.3d.50.20.100,legal7,76.516170,230,7595602,0,0
+newblue6.mfar80.3d.60.10.100,legal7,3278.214429,9835,17683846,0,0
 CSV
+
+declare -A kill_after_by_bench=()
+while IFS=, read -r benchmark _role _original_seconds kill_after_seconds _rest; do
+  [[ "$benchmark" == "benchmark" ]] && continue
+  kill_after_by_bench["$benchmark"]="$kill_after_seconds"
+done < "$RESULT_DIR/original_baseline.csv"
 
 case "$BENCH_SET" in
   legal7)
@@ -91,26 +97,91 @@ esac
   uname -a || true
   lscpu || true
   git status --short || true
+  echo "kill_gate=3x original runtime per benchmark"
 } > "$RESULT_DIR/environment.txt"
 
-env "${strategy_env[@]}" \
-  ROUTER_LABEL="$STRATEGY" \
-  NTHU_DIR="$NTHU_DIR" \
-  BUILD_DIR="$BUILD_DIR" \
-  RESULT_DIR="$RESULT_DIR" \
-  BENCH_DIR="$BENCH_DIR" \
-  BENCH_LIST="$RESULT_DIR/bench.list" \
-  EVALUATOR=lab2 \
-  NTHU_OPENMP=OFF \
-  NTHU_CUDA=OFF \
-  SKIP_BUILD="$SKIP_BUILD" \
-  JOBS="$JOBS" \
-  PARALLEL_BENCH_JOBS="$PARALLEL_BENCH_JOBS" \
-  NTHU_EXTRA_ARGS="$strategy_args" \
-  bash scripts/run_nthu_ispd08.sh
+CSV_HEADER="router,benchmark,status,seconds,evaluator,total_wirelength,total_overflow,max_overflow,overflowed_nets,overflowed_edges,output"
+
+run_one_guard() {
+  local bench_entry=$1
+  local name
+  name=$(basename "$bench_entry" .gr)
+  local timeout_seconds=${kill_after_by_bench[$name]:-}
+  if [[ -z "$timeout_seconds" ]]; then
+    echo "missing original timeout baseline for $name" >&2
+    return 2
+  fi
+
+  local bench_result_dir="$RESULT_DIR/$name"
+  local bench_list="$bench_result_dir/bench.list"
+  mkdir -p "$bench_result_dir"
+  printf '%s\n' "$bench_entry" > "$bench_list"
+  {
+    echo "strategy=$STRATEGY"
+    echo "benchmark=$name"
+    echo "timeout_seconds=$timeout_seconds"
+    echo "strategy_args=$strategy_args"
+    echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "env=${strategy_env[*]}"
+  } > "$bench_result_dir/run_meta.txt"
+
+  set +e
+  timeout --kill-after=20s "${timeout_seconds}s" \
+    env "${strategy_env[@]}" \
+      ROUTER_LABEL="$STRATEGY" \
+      NTHU_DIR="$NTHU_DIR" \
+      BUILD_DIR="$BUILD_DIR" \
+      RESULT_DIR="$bench_result_dir" \
+      BENCH_DIR="$BENCH_DIR" \
+      BENCH_LIST="$bench_list" \
+      EVALUATOR=lab2 \
+      NTHU_OPENMP=OFF \
+      NTHU_CUDA=OFF \
+      SKIP_BUILD="$SKIP_BUILD" \
+      JOBS="$JOBS" \
+      PARALLEL_BENCH_JOBS=1 \
+      NTHU_EXTRA_ARGS="$strategy_args" \
+      bash scripts/run_nthu_ispd08.sh \
+      > "$bench_result_dir/runner.log" 2>&1
+  local rc=$?
+  set -e
+
+  echo "ended_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$bench_result_dir/run_meta.txt"
+  echo "exit_code=$rc" >> "$bench_result_dir/run_meta.txt"
+  if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+    echo "timeout=1" >> "$bench_result_dir/run_meta.txt"
+    if [[ ! -f "$bench_result_dir/summary.csv" ]] || [[ $(wc -l < "$bench_result_dir/summary.csv") -le 1 ]]; then
+      echo "$CSV_HEADER" > "$bench_result_dir/summary.csv"
+      echo "$STRATEGY,$name,timeout,$timeout_seconds,NA,NA,NA,NA,NA,NA,$bench_result_dir/$name.nthu.out" >> "$bench_result_dir/summary.csv"
+    fi
+  else
+    echo "timeout=0" >> "$bench_result_dir/run_meta.txt"
+  fi
+}
+
+for bench_entry in "${benches[@]}"; do
+  run_one_guard "$bench_entry" &
+  while (( $(jobs -pr | wc -l) >= PARALLEL_BENCH_JOBS )); do
+    sleep 1
+  done
+done
+
+wait
+
+echo "$CSV_HEADER" > "$RESULT_DIR/summary.csv"
+for bench_entry in "${benches[@]}"; do
+  name=$(basename "$bench_entry" .gr)
+  if [[ -f "$RESULT_DIR/$name/summary.csv" ]]; then
+    tail -n +2 "$RESULT_DIR/$name/summary.csv" >> "$RESULT_DIR/summary.csv"
+  else
+    timeout_seconds=${kill_after_by_bench[$name]:-NA}
+    echo "$STRATEGY,$name,missing,$timeout_seconds,NA,NA,NA,NA,NA,NA,$RESULT_DIR/$name/$name.nthu.out" >> "$RESULT_DIR/summary.csv"
+  fi
+done
 
 python3 - "$RESULT_DIR" <<'PY'
 import csv
+import json
 import sys
 from pathlib import Path
 
@@ -127,16 +198,25 @@ with (root / "summary.csv").open(newline="", encoding="utf-8") as f:
         base = baseline[row["benchmark"]]
         original_seconds = float(base["original_seconds"])
         original_wl = float(base["original_wl"])
-        seconds = float(row["seconds"])
-        wl = float(row["total_wirelength"])
         row["role"] = base["role"]
         row["original_seconds"] = f"{original_seconds:.6f}"
-        row["speedup_vs_original"] = f"{original_seconds / seconds:.6f}"
+        row["kill_after_seconds"] = base["kill_after_seconds"]
+        try:
+            seconds = float(row["seconds"])
+            row["speedup_vs_original"] = f"{original_seconds / seconds:.6f}"
+        except Exception:
+            seconds = None
+            row["speedup_vs_original"] = "NA"
         row["original_wl"] = base["original_wl"]
-        row["wl_ratio_vs_original"] = f"{wl / original_wl:.6f}"
+        try:
+            wl = float(row["total_wirelength"])
+            row["wl_ratio_vs_original"] = f"{wl / original_wl:.6f}"
+        except Exception:
+            row["wl_ratio_vs_original"] = "NA"
         row["passes_original_legal_guard"] = (
             row["status"] == "ok" and row["total_overflow"] == "0" and row["max_overflow"] == "0"
         )
+        row["timed_out"] = row["status"] == "timeout"
         rows.append(row)
 
 fieldnames = [
@@ -146,6 +226,7 @@ fieldnames = [
     "status",
     "seconds",
     "original_seconds",
+    "kill_after_seconds",
     "speedup_vs_original",
     "total_wirelength",
     "original_wl",
@@ -155,6 +236,7 @@ fieldnames = [
     "overflowed_nets",
     "overflowed_edges",
     "passes_original_legal_guard",
+    "timed_out",
     "output",
 ]
 with (root / "summary_with_baseline.csv").open("w", newline="", encoding="utf-8") as f:
@@ -163,14 +245,18 @@ with (root / "summary_with_baseline.csv").open("w", newline="", encoding="utf-8"
     writer.writerows(rows)
 
 total_original = sum(float(row["original_seconds"]) for row in rows)
-total_seconds = sum(float(row["seconds"]) for row in rows)
+total_seconds = sum(float(row["seconds"]) for row in rows if row["seconds"] not in ("NA", ""))
 legal = sum(1 for row in rows if row["passes_original_legal_guard"])
+timeouts = sum(1 for row in rows if row["timed_out"])
 with (root / "aggregate.txt").open("w", encoding="utf-8") as f:
     f.write(f"rows={len(rows)}\n")
     f.write(f"legal={legal}/{len(rows)}\n")
+    f.write(f"timeouts={timeouts}\n")
     f.write(f"original_seconds={total_original:.6f}\n")
     f.write(f"candidate_seconds={total_seconds:.6f}\n")
-    f.write(f"suite_speedup={total_original / total_seconds:.6f}\n")
+    f.write(f"suite_speedup={total_original / total_seconds:.6f}\n" if total_seconds else "suite_speedup=NA\n")
+with (root / "timeouts.json").open("w", encoding="utf-8") as f:
+    json.dump([row for row in rows if row["timed_out"]], f, indent=2)
 print(root / "summary_with_baseline.csv")
 PY
 
