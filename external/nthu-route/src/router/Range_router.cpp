@@ -326,6 +326,14 @@ int transactional_strict_maze_max_area() {
     return std::max(1, std::atoi(value));
 }
 
+int transactional_proposal_wave_batches() {
+    const char* value = std::getenv("NTHU_TRANSACTIONAL_PROPOSAL_WAVE_BATCHES");
+    if (value == nullptr || *value == '\0') {
+        return 64;
+    }
+    return std::max(1, std::atoi(value));
+}
+
 bool profile_enabled() {
     return std::getenv("NTHU_PROFILE") != nullptr;
 }
@@ -685,6 +693,7 @@ struct RangeProfile {
 struct RerouteCandidateBox {
     NTHUR::Two_pin_element_2d* two_pin;
     NTHUR::Rectangle box;
+    int order = 0;
 };
 
 bool boxes_overlap(const NTHUR::Rectangle& a, const NTHUR::Rectangle& b) {
@@ -1542,6 +1551,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         const bool try_dogleg = transactional_dogleg_enabled();
         const bool try_strict_maze = transactional_strict_maze_enabled();
         const int strict_maze_area = transactional_strict_maze_max_area();
+        const int proposal_wave_batches = transactional_proposal_wave_batches();
         const bool use_conflict_graph = transactional_conflict_graph_enabled();
 
         std::unordered_map<int, Rectangle> net_path_boxes;
@@ -1562,7 +1572,8 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             remaining.push_back(RerouteCandidateBox {
                     two_pin,
                     reroute_conflict_box(*two_pin, construct_2d_tree,
-                            net_box != net_path_boxes.end() ? &net_box->second : nullptr) });
+                            net_box != net_path_boxes.end() ? &net_box->second : nullptr),
+                    i });
         }
 
         int batch_limit = 1;
@@ -1746,65 +1757,85 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         int clean_skipped = 0;
         int max_batch_size = 0;
         int max_workers_used = 1;
+        int proposal_waves = 0;
+        int max_wave_inputs = 0;
         double propose_ms = 0.0;
         double commit_ms = 0.0;
 
-        for (const TransactionBatch& transaction_batch : planned_batches) {
-            const int current_batch_size = static_cast<int>(transaction_batch.items.size());
-            ++batches;
-            max_batch_size = std::max(max_batch_size, current_batch_size);
-            if (current_batch_size > 1) {
-                ++parallel_batches;
-            } else {
-                ++serialized_batches;
+        std::vector<TransactionProposal> proposals(transaction_count);
+        for (int wave_begin = 0; wave_begin < static_cast<int>(planned_batches.size());
+                wave_begin += proposal_wave_batches) {
+            ++proposal_waves;
+            const int wave_end = std::min(static_cast<int>(planned_batches.size()),
+                    wave_begin + proposal_wave_batches);
+            std::vector<const RerouteCandidateBox*> wave_items;
+            wave_items.reserve((wave_end - wave_begin) * batch_limit);
+            for (int batch_index = wave_begin; batch_index < wave_end; ++batch_index) {
+                const TransactionBatch& transaction_batch = planned_batches[batch_index];
+                const int current_batch_size = static_cast<int>(transaction_batch.items.size());
+                ++batches;
+                max_batch_size = std::max(max_batch_size, current_batch_size);
+                if (current_batch_size > 1) {
+                    ++parallel_batches;
+                } else {
+                    ++serialized_batches;
+                }
+                for (const RerouteCandidateBox& item : transaction_batch.items) {
+                    wave_items.push_back(&item);
+                }
             }
+            max_wave_inputs = std::max(max_wave_inputs, static_cast<int>(wave_items.size()));
 
-            std::vector<TransactionProposal> proposals(current_batch_size);
             const auto propose_start = ProfileClock::now();
 #ifdef NTHU_ROUTE_OPENMP
-            const int workers = std::max(1, std::min(scratch_count, current_batch_size));
+            const int workers = std::max(1, std::min(scratch_count,
+                    static_cast<int>(wave_items.size())));
             max_workers_used = std::max(max_workers_used, workers);
 #pragma omp parallel for num_threads(workers) schedule(dynamic, 1)
-            for (int i = 0; i < current_batch_size; ++i) {
-                make_transaction(transaction_batch.items[i].two_pin,
-                        *monotonic_scratch[omp_get_thread_num()], proposals[i]);
+            for (int i = 0; i < static_cast<int>(wave_items.size()); ++i) {
+                const RerouteCandidateBox& item = *wave_items[i];
+                make_transaction(item.two_pin,
+                        *monotonic_scratch[omp_get_thread_num()], proposals[item.order]);
             }
 #else
-            for (int i = 0; i < current_batch_size; ++i) {
-                make_transaction(transaction_batch.items[i].two_pin, monotonic_scratch, proposals[i]);
+            for (const RerouteCandidateBox* item : wave_items) {
+                make_transaction(item->two_pin, monotonic_scratch, proposals[item->order]);
             }
 #endif
             propose_ms += profile_ms(propose_start, ProfileClock::now());
 
             const auto commit_start = ProfileClock::now();
-            for (int i = 0; i < current_batch_size; ++i) {
-                Two_pin_element_2d* two_pin = transaction_batch.items[i].two_pin;
-                const TransactionProposal& proposal = proposals[i];
-                if (proposal.valid) {
-                    ++proposed;
-                } else {
-                    ++invalid;
-                }
-
-                if (!congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false)) {
-                    if (proposal.valid &&
-                            congestion.check_path_no_overflow(proposal.path, two_pin->net_id, true)) {
-                        construct_2d_tree.NetDirtyBit[two_pin->net_id] = true;
-                        ++total_twopin;
-                        congestion.update_congestion_map_remove_two_pin_net(two_pin->path, two_pin->net_id);
-                        two_pin->path = proposal.path;
-                        two_pin->pin1 = two_pin->path.front();
-                        two_pin->pin2 = two_pin->path.back();
-                        if (version == 2) {
-                            two_pin->done = construct_2d_tree.done_iter;
-                        }
-                        congestion.update_congestion_map_insert_two_pin_net(*two_pin);
-                        ++committed;
-                    } else if (proposal.valid) {
-                        ++commit_rejected;
+            for (int batch_index = wave_begin; batch_index < wave_end; ++batch_index) {
+                const TransactionBatch& transaction_batch = planned_batches[batch_index];
+                for (const RerouteCandidateBox& item : transaction_batch.items) {
+                    Two_pin_element_2d* two_pin = item.two_pin;
+                    const TransactionProposal& proposal = proposals[item.order];
+                    if (proposal.valid) {
+                        ++proposed;
+                    } else {
+                        ++invalid;
                     }
-                } else {
-                    ++clean_skipped;
+
+                    if (!congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false)) {
+                        if (proposal.valid &&
+                                congestion.check_path_no_overflow(proposal.path, two_pin->net_id, true)) {
+                            construct_2d_tree.NetDirtyBit[two_pin->net_id] = true;
+                            ++total_twopin;
+                            congestion.update_congestion_map_remove_two_pin_net(two_pin->path, two_pin->net_id);
+                            two_pin->path = proposal.path;
+                            two_pin->pin1 = two_pin->path.front();
+                            two_pin->pin2 = two_pin->path.back();
+                            if (version == 2) {
+                                two_pin->done = construct_2d_tree.done_iter;
+                            }
+                            congestion.update_congestion_map_insert_two_pin_net(*two_pin);
+                            ++committed;
+                        } else if (proposal.valid) {
+                            ++commit_rejected;
+                        }
+                    } else {
+                        ++clean_skipped;
+                    }
                 }
             }
             commit_ms += profile_ms(commit_start, ProfileClock::now());
@@ -1819,9 +1850,10 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             range_profile.parallel_max_batch = std::max(range_profile.parallel_max_batch, max_batch_size);
         }
         if (do_profile || parallel_reroute_log_enabled()) {
-            log_sp->info("transactional reroute candidates={} overflow_candidates={} transaction_candidates={} skipped_by_limit={} batches={} parallel_batches={} serialized_batches={} proposed={} committed={} invalid={} commit_rejected={} clean_skipped={} max_batch={} max_workers={} batch_limit={} scheduler={} l_shape={} dogleg={} strict_maze={} strict_maze_area={} fallback=0 plan_ms={:.3f} propose_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("transactional reroute candidates={} overflow_candidates={} transaction_candidates={} skipped_by_limit={} batches={} parallel_batches={} serialized_batches={} proposal_waves={} max_wave_inputs={} proposed={} committed={} invalid={} commit_rejected={} clean_skipped={} max_batch={} max_workers={} batch_limit={} scheduler={} l_shape={} dogleg={} strict_maze={} strict_maze_area={} fallback=0 plan_ms={:.3f} propose_ms={:.3f} commit_ms={:.3f}",
                     twopin_list.size(), overflow_twopins.size(), transaction_count, skipped_by_limit,
-                    batches, parallel_batches, serialized_batches, proposed, committed, invalid,
+                    batches, parallel_batches, serialized_batches, proposal_waves, max_wave_inputs,
+                    proposed, committed, invalid,
                     commit_rejected, clean_skipped, max_batch_size, max_workers_used, batch_limit,
                     use_conflict_graph ? "conflict" : "chunk",
                     try_l_shape ? 1 : 0, try_dogleg ? 1 : 0, try_strict_maze ? 1 : 0,
