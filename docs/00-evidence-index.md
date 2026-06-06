@@ -48,6 +48,7 @@ explicitly stated.
 | 2026-06-05 final VM strategy reports | `../reports/03-final-vm-strategy-results.md`, `../reports/04-main-vs-final-router-comparison.md`, `../reports/05-wl-speed-literature-and-probes.md`, `../reports/06-bounded-length-reroute-probe.md`, `../reports/02-methods-by-commit-and-result.md` | High-overflow adaptive P2 budget, strict maze negative results, layer-penalty probe, bounded-length probe. | Current one-strategy final family, same-CLI main comparison, and final rejected/accepted method accounting. |
 | 2026-06-06 final writeup | `../reports/01-final-router-optimization-zh.md`, `../reports/presentations/*.md` | Synthesized from the earlier evidence. No new benchmark rows. | Use for oral presentation/writeup; trace raw numbers back to the dated files above. |
 | 2026-06-06 two-stage parallel reroute experiment | `26-two-stage-parallel-reroute-experiment.md` | Separate branch `experiment-two-stage-parallel-reroute`; proposal/commit split for reroute parallelization. | Experimental only. Compare only against same-branch runs with and without `NTHU_TWO_STAGE_PARALLEL_REROUTE=1`. |
+| 2026-06-06 transactional virtual-ripup experiment | `../reports/08-transactional-reroute-technical-comparison.md` | Separate branch `experiment-transactional-virtual-ripup`; preserves NTHU-Route algorithm while adding transaction-local virtual rip-up and deterministic rollback commit. | Design/implementation note until VM build and benchmark rows are recorded. Compare only against same-runner transactional wave16 and original NTHU rows. |
 
 ## Raw / Historical Evidence Files
 
@@ -93,6 +94,7 @@ raw run logs. They are still indexed here so `docs/` is the full navigation root
 | `../reports/02-methods-by-commit-and-result.md` | Commit-to-method and method-family performance summary. | Tracking which commit/report produced each claim. |
 | `../reports/01-final-router-optimization-zh.md` | Final Chinese report with pitfalls, methods, results, future work, issues, and literature. | Main writeup. |
 | `../reports/07-scoring-methodology.md` | Defines legal scoring policy. | Use before quoting speedups: one config, fixed set, total-time primary score, geomean secondary. |
+| `../reports/08-transactional-reroute-technical-comparison.md` | Paper-to-code comparison for the transactional virtual-ripup branch. | Explaining why the new parallelization keeps the NTHU algorithm and only changes synchronization semantics. |
 
 ## Presentation Decks
 

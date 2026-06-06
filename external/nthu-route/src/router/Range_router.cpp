@@ -3,6 +3,7 @@
 #include <boost/multi_array.hpp>
 #include <boost/multi_array/base.hpp>
 #include <boost/multi_array/multi_array_ref.hpp>
+#include <boost/functional/hash.hpp>
 #include <sys/types.h>
 #include <algorithm>
 #include <array>
@@ -17,6 +18,7 @@
 #include <memory>
 #include <queue>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -494,6 +496,106 @@ int inserted_path_overflow_score(const std::vector<NTHUR::Coordinate_2d>& path,
     return overflow_score;
 }
 
+struct TransactionEdgeKey {
+    int x = 0;
+    int y = 0;
+    int axis = 0;
+
+    bool operator==(const TransactionEdgeKey& other) const {
+        return x == other.x && y == other.y && axis == other.axis;
+    }
+};
+
+struct TransactionEdgeKeyHash {
+    std::size_t operator()(const TransactionEdgeKey& key) const {
+        std::size_t seed = 0;
+        boost::hash_combine(seed, key.x);
+        boost::hash_combine(seed, key.y);
+        boost::hash_combine(seed, key.axis);
+        return seed;
+    }
+};
+
+using TransactionEdgeCounts = std::unordered_map<TransactionEdgeKey, int, TransactionEdgeKeyHash>;
+
+TransactionEdgeKey transaction_edge_key(const NTHUR::Coordinate_2d& c1,
+        const NTHUR::Coordinate_2d& c2) {
+    if (c1.x != c2.x) {
+        const NTHUR::Coordinate_2d& left = c1.x < c2.x ? c1 : c2;
+        return TransactionEdgeKey { left.x, left.y, 0 };
+    }
+    const NTHUR::Coordinate_2d& top = c1.y < c2.y ? c1 : c2;
+    return TransactionEdgeKey { top.x, top.y, 1 };
+}
+
+TransactionEdgeCounts transaction_path_edge_counts(
+        const std::vector<NTHUR::Coordinate_2d>& path) {
+    TransactionEdgeCounts counts;
+    counts.reserve(path.size());
+    for (int path_index = static_cast<int>(path.size()) - 2; path_index >= 0; --path_index) {
+        ++counts[transaction_edge_key(path[path_index], path[path_index + 1])];
+    }
+    return counts;
+}
+
+int transaction_edge_count(const TransactionEdgeCounts& counts,
+        const NTHUR::Coordinate_2d& c1,
+        const NTHUR::Coordinate_2d& c2) {
+    auto it = counts.find(transaction_edge_key(c1, c2));
+    return it == counts.end() ? 0 : it->second;
+}
+
+int transaction_net_use_count(const NTHUR::Edge_2d& edge, int net_id) {
+    auto it = edge.used_net.find(net_id);
+    return it == edge.used_net.end() ? 0 : it->second;
+}
+
+bool transaction_removes_net_from_edge(const NTHUR::Edge_2d& edge,
+        int net_id,
+        int removed_edge_count) {
+    return removed_edge_count > 0 &&
+            transaction_net_use_count(edge, net_id) <= removed_edge_count;
+}
+
+bool transaction_edge_has_net_after_remove(const NTHUR::Edge_2d& edge,
+        int net_id,
+        int removed_edge_count) {
+    return edge.lookupNet(net_id) &&
+            !transaction_removes_net_from_edge(edge, net_id, removed_edge_count);
+}
+
+double transaction_cur_cap_after_remove(const NTHUR::Edge_2d& edge,
+        int net_id,
+        int removed_edge_count) {
+    return edge.cur_cap -
+            (transaction_removes_net_from_edge(edge, net_id, removed_edge_count) ? 1.0 : 0.0);
+}
+
+bool check_path_no_overflow_virtual_remove(const std::vector<NTHUR::Coordinate_2d>& path,
+        int net_id,
+        const NTHUR::Congestion& congestion,
+        const TransactionEdgeCounts& removed_edges) {
+    std::unordered_set<TransactionEdgeKey, TransactionEdgeKeyHash> inserted_edges;
+    inserted_edges.reserve(path.size());
+    for (int path_index = static_cast<int>(path.size()) - 2; path_index >= 0; --path_index) {
+        const NTHUR::Coordinate_2d& c1 = path[path_index];
+        const NTHUR::Coordinate_2d& c2 = path[path_index + 1];
+        const NTHUR::Edge_2d& edge = congestion.congestionMap2d.edge(c1, c2);
+        const TransactionEdgeKey key = transaction_edge_key(c1, c2);
+        auto removed_it = removed_edges.find(key);
+        const int removed_edge_count = removed_it == removed_edges.end() ? 0 : removed_it->second;
+        const bool net_present_after_remove =
+                transaction_edge_has_net_after_remove(edge, net_id, removed_edge_count);
+        const double cur_cap_after_remove =
+                transaction_cur_cap_after_remove(edge, net_id, removed_edge_count);
+        const int inc = (!net_present_after_remove && inserted_edges.insert(key).second) ? 1 : 0;
+        if (cur_cap_after_remove + inc > edge.max_cap) {
+            return false;
+        }
+    }
+    return true;
+}
+
 int path_edges(const std::vector<NTHUR::Coordinate_2d>& path) {
     return path.empty() ? 0 : static_cast<int>(path.size()) - 1;
 }
@@ -532,7 +634,8 @@ bool find_strict_legal_maze_path(const NTHUR::Two_pin_element_2d& two_pin,
         const NTHUR::Coordinate_2d& start,
         const NTHUR::Coordinate_2d& end,
         int max_area,
-        std::vector<NTHUR::Coordinate_2d>& path) {
+        std::vector<NTHUR::Coordinate_2d>& path,
+        const TransactionEdgeCounts* removed_edges = nullptr) {
     const int width = end.x - start.x + 1;
     const int height = end.y - start.y + 1;
     if (width <= 0 || height <= 0) {
@@ -590,11 +693,16 @@ bool find_strict_legal_maze_path(const NTHUR::Two_pin_element_2d& two_pin,
                 continue;
             }
             const NTHUR::Edge_2d& edge = congestion.congestionMap2d.edge(current, next);
-            // Reallocation rebuilds each net as a tree; reusing same-net edges can create cycles.
-            if (edge.lookupNet(two_pin.net_id)) {
+            const int removed_edge_count = removed_edges == nullptr ? 0 :
+                    transaction_edge_count(*removed_edges, current, next);
+            const bool net_present_after_remove =
+                    transaction_edge_has_net_after_remove(edge, two_pin.net_id, removed_edge_count);
+            // Reallocation rebuilds each net as a tree; remaining same-net edges can create cycles.
+            if (net_present_after_remove) {
                 continue;
             }
-            if (edge.cur_cap + 1.0 > edge.max_cap) {
+            if (transaction_cur_cap_after_remove(edge, two_pin.net_id, removed_edge_count) + 1.0 >
+                    edge.max_cap) {
                 continue;
             }
             const int next_index = index_of(next);
@@ -1585,6 +1693,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
 
         auto accept_transaction_path = [&](const Two_pin_element_2d& source,
                 const std::vector<Coordinate_2d>& candidate_path,
+                const TransactionEdgeCounts& removed_edges,
                 TransactionProposal& proposal) -> bool {
             if (candidate_path.size() < 2 || candidate_path == source.path) {
                 return false;
@@ -1592,7 +1701,8 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             if (candidate_path.front() != source.pin1 || candidate_path.back() != source.pin2) {
                 return false;
             }
-            if (!congestion.check_path_no_overflow(candidate_path, source.net_id, true)) {
+            if (!check_path_no_overflow_virtual_remove(candidate_path, source.net_id,
+                    congestion, removed_edges)) {
                 return false;
             }
             proposal.path = candidate_path;
@@ -1604,11 +1714,13 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 MonotonicRouting& local_monotonic,
                 TransactionProposal& proposal) {
             proposal.old_overflow_score = path_overflow_score(*source, congestion);
+            const TransactionEdgeCounts removed_edges =
+                    transaction_path_edge_counts(source->path);
 
             if (try_l_shape) {
                 Two_pin_element_2d trial(*source);
                 if (try_l_shape_fastpath(trial) &&
-                        accept_transaction_path(*source, trial.path, proposal)) {
+                        accept_transaction_path(*source, trial.path, removed_edges, proposal)) {
                     return;
                 }
             }
@@ -1616,7 +1728,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             if (try_dogleg && proposal.old_overflow_score >= dogleg_min_overflow_score()) {
                 Two_pin_element_2d trial(*source);
                 if (try_dogleg_fastpath(trial) &&
-                        accept_transaction_path(*source, trial.path, proposal)) {
+                        accept_transaction_path(*source, trial.path, removed_edges, proposal)) {
                     return;
                 }
             }
@@ -1627,7 +1739,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             if (local_monotonic.monotonicRoute(trial, bound, bound_path)) {
                 const std::vector<Coordinate_2d>& candidate_path =
                         trial.path.empty() ? bound_path : trial.path;
-                if (accept_transaction_path(*source, candidate_path, proposal)) {
+                if (accept_transaction_path(*source, candidate_path, removed_edges, proposal)) {
                     return;
                 }
             }
@@ -1646,8 +1758,8 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 end.y = min(construct_2d_tree.rr_map.get_gridy() - 1, end.y + size);
                 std::vector<Coordinate_2d> legal_path;
                 if (find_strict_legal_maze_path(*source, congestion, start, end,
-                        strict_maze_area, legal_path)) {
-                    (void) accept_transaction_path(*source, legal_path, proposal);
+                        strict_maze_area, legal_path, &removed_edges)) {
+                    (void) accept_transaction_path(*source, legal_path, removed_edges, proposal);
                 }
             }
         };
@@ -1754,6 +1866,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         int committed = 0;
         int invalid = 0;
         int commit_rejected = 0;
+        int rollback = 0;
         int clean_skipped = 0;
         int max_batch_size = 0;
         int max_workers_used = 1;
@@ -1817,21 +1930,25 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                     }
 
                     if (!congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false)) {
-                        if (proposal.valid &&
-                                congestion.check_path_no_overflow(proposal.path, two_pin->net_id, true)) {
-                            construct_2d_tree.NetDirtyBit[two_pin->net_id] = true;
-                            ++total_twopin;
-                            congestion.update_congestion_map_remove_two_pin_net(two_pin->path, two_pin->net_id);
-                            two_pin->path = proposal.path;
-                            two_pin->pin1 = two_pin->path.front();
-                            two_pin->pin2 = two_pin->path.back();
-                            if (version == 2) {
-                                two_pin->done = construct_2d_tree.done_iter;
+                        if (proposal.valid) {
+                            const std::vector<Coordinate_2d> old_path(two_pin->path);
+                            congestion.update_congestion_map_remove_two_pin_net(old_path, two_pin->net_id);
+                            if (congestion.check_path_no_overflow(proposal.path, two_pin->net_id, true)) {
+                                construct_2d_tree.NetDirtyBit[two_pin->net_id] = true;
+                                ++total_twopin;
+                                two_pin->path = proposal.path;
+                                two_pin->pin1 = two_pin->path.front();
+                                two_pin->pin2 = two_pin->path.back();
+                                if (version == 2) {
+                                    two_pin->done = construct_2d_tree.done_iter;
+                                }
+                                congestion.update_congestion_map_insert_two_pin_net(*two_pin);
+                                ++committed;
+                            } else {
+                                congestion.update_congestion_map_insert_two_pin_net(*two_pin);
+                                ++commit_rejected;
+                                ++rollback;
                             }
-                            congestion.update_congestion_map_insert_two_pin_net(*two_pin);
-                            ++committed;
-                        } else if (proposal.valid) {
-                            ++commit_rejected;
                         }
                     } else {
                         ++clean_skipped;
@@ -1850,11 +1967,11 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             range_profile.parallel_max_batch = std::max(range_profile.parallel_max_batch, max_batch_size);
         }
         if (do_profile || parallel_reroute_log_enabled()) {
-            log_sp->info("transactional reroute candidates={} overflow_candidates={} transaction_candidates={} skipped_by_limit={} batches={} parallel_batches={} serialized_batches={} proposal_waves={} max_wave_inputs={} proposed={} committed={} invalid={} commit_rejected={} clean_skipped={} max_batch={} max_workers={} batch_limit={} scheduler={} l_shape={} dogleg={} strict_maze={} strict_maze_area={} fallback=0 plan_ms={:.3f} propose_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("transactional reroute candidates={} overflow_candidates={} transaction_candidates={} skipped_by_limit={} batches={} parallel_batches={} serialized_batches={} proposal_waves={} max_wave_inputs={} proposed={} committed={} invalid={} commit_rejected={} rollback={} clean_skipped={} max_batch={} max_workers={} batch_limit={} scheduler={} l_shape={} dogleg={} strict_maze={} strict_maze_area={} virtual_remove=1 fallback=0 plan_ms={:.3f} propose_ms={:.3f} commit_ms={:.3f}",
                     twopin_list.size(), overflow_twopins.size(), transaction_count, skipped_by_limit,
                     batches, parallel_batches, serialized_batches, proposal_waves, max_wave_inputs,
                     proposed, committed, invalid,
-                    commit_rejected, clean_skipped, max_batch_size, max_workers_used, batch_limit,
+                    commit_rejected, rollback, clean_skipped, max_batch_size, max_workers_used, batch_limit,
                     use_conflict_graph ? "conflict" : "chunk",
                     try_l_shape ? 1 : 0, try_dogleg ? 1 : 0, try_strict_maze ? 1 : 0,
                     strict_maze_area, plan_ms, propose_ms, commit_ms);
