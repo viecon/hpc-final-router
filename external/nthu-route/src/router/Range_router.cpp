@@ -293,6 +293,11 @@ bool transactional_strict_maze_enabled() {
     return value == nullptr || *value == '\0' || std::atoi(value) != 0;
 }
 
+bool transactional_serial_repair_enabled() {
+    const char* value = std::getenv("NTHU_TRANSACTIONAL_SERIAL_REPAIR");
+    return value == nullptr || *value == '\0' || std::atoi(value) != 0;
+}
+
 bool transactional_conflict_graph_enabled() {
     return std::getenv("NTHU_TRANSACTIONAL_CONFLICT_GRAPH") != nullptr;
 }
@@ -1658,6 +1663,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         const bool try_l_shape = transactional_l_shape_enabled();
         const bool try_dogleg = transactional_dogleg_enabled();
         const bool try_strict_maze = transactional_strict_maze_enabled();
+        const bool serial_repair_enabled = transactional_serial_repair_enabled();
         const int strict_maze_area = transactional_strict_maze_max_area();
         const int proposal_wave_batches = transactional_proposal_wave_batches();
         const bool use_conflict_graph = transactional_conflict_graph_enabled();
@@ -1868,12 +1874,15 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         int commit_rejected = 0;
         int rollback = 0;
         int clean_skipped = 0;
+        int serial_repair = 0;
+        int repair_skipped = 0;
         int max_batch_size = 0;
         int max_workers_used = 1;
         int proposal_waves = 0;
         int max_wave_inputs = 0;
         double propose_ms = 0.0;
         double commit_ms = 0.0;
+        double repair_ms = 0.0;
 
         std::vector<TransactionProposal> proposals(transaction_count);
         for (int wave_begin = 0; wave_begin < static_cast<int>(planned_batches.size());
@@ -1958,23 +1967,38 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             commit_ms += profile_ms(commit_start, ProfileClock::now());
         }
 
+        if (serial_repair_enabled) {
+            const auto repair_start = ProfileClock::now();
+            for (Two_pin_element_2d* two_pin : overflow_twopins) {
+                if (!congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false)) {
+                    range_router(*two_pin, version);
+                    ++serial_repair;
+                } else {
+                    ++repair_skipped;
+                }
+            }
+            repair_ms += profile_ms(repair_start, ProfileClock::now());
+        }
+
         if (do_profile) {
             range_profile.reroute_ms += profile_ms(reroute_start, ProfileClock::now());
             range_profile.parallel_batches += batches;
             range_profile.parallel_batches_with_work += parallel_batches;
             range_profile.parallel_inputs += transaction_count;
-            range_profile.parallel_serialized_inputs += serialized_batches;
+            range_profile.parallel_serialized_inputs += serialized_batches + serial_repair;
             range_profile.parallel_max_batch = std::max(range_profile.parallel_max_batch, max_batch_size);
         }
         if (do_profile || parallel_reroute_log_enabled()) {
-            log_sp->info("transactional reroute candidates={} overflow_candidates={} transaction_candidates={} skipped_by_limit={} batches={} parallel_batches={} serialized_batches={} proposal_waves={} max_wave_inputs={} proposed={} committed={} invalid={} commit_rejected={} rollback={} clean_skipped={} max_batch={} max_workers={} batch_limit={} scheduler={} l_shape={} dogleg={} strict_maze={} strict_maze_area={} virtual_remove=1 fallback=0 plan_ms={:.3f} propose_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("transactional reroute candidates={} overflow_candidates={} transaction_candidates={} skipped_by_limit={} batches={} parallel_batches={} serialized_batches={} proposal_waves={} max_wave_inputs={} proposed={} committed={} invalid={} commit_rejected={} rollback={} clean_skipped={} serial_repair={} repair_skipped={} max_batch={} max_workers={} batch_limit={} scheduler={} l_shape={} dogleg={} strict_maze={} strict_maze_area={} virtual_remove=1 serial_repair_enabled={} fallback=0 plan_ms={:.3f} propose_ms={:.3f} commit_ms={:.3f} repair_ms={:.3f}",
                     twopin_list.size(), overflow_twopins.size(), transaction_count, skipped_by_limit,
                     batches, parallel_batches, serialized_batches, proposal_waves, max_wave_inputs,
                     proposed, committed, invalid,
-                    commit_rejected, rollback, clean_skipped, max_batch_size, max_workers_used, batch_limit,
+                    commit_rejected, rollback, clean_skipped, serial_repair, repair_skipped,
+                    max_batch_size, max_workers_used, batch_limit,
                     use_conflict_graph ? "conflict" : "chunk",
                     try_l_shape ? 1 : 0, try_dogleg ? 1 : 0, try_strict_maze ? 1 : 0,
-                    strict_maze_area, plan_ms, propose_ms, commit_ms);
+                    strict_maze_area, serial_repair_enabled ? 1 : 0,
+                    plan_ms, propose_ms, commit_ms, repair_ms);
         }
         return;
     }

@@ -26,7 +26,7 @@ Keep the main router algorithm aligned with NTHU-Route:
 | SPRoute 2.0 | Deterministic batching and race-free R&R operations. | Matches our deterministic commit order and fixed batch planning requirement. | Partially adopted. |
 | Parallel IP partitioning | Solve rectangular subregions independently, then patch boundaries. | This changes the router architecture too much for the current NTHU-based constraint. It is only useful as background for spatial conflict boxes. | Not adopted. |
 
-## Stage A Implementation
+## Stage A Implementation: Virtual Rip-Up
 
 The new branch adds transaction-local virtual rip-up in
 `external/nthu-route/src/router/Range_router.cpp`.
@@ -62,10 +62,59 @@ if old path still overflows:
 This follows the DSD 2013 route-search / area-update split without changing
 NTHU's global routing algorithm.
 
+## Stage A VM Finding
+
+Stage A built on the VM, and the log confirmed that `Range_router.cpp` was
+compiled into `NthuRoute`.
+
+First smoke:
+
+```text
+commit=b276c39
+result=/home/ubuntu/hpc-final-router-virtual-ripup/results/vm_transactional_virtual_ripup/smoke_adaptec3_b276c39
+benchmark=adaptec3.dragon70.3d.30.50.90
+seconds=632.821977
+total_wirelength=13698653
+total_overflow=3288216
+max_overflow=2
+```
+
+This proves that virtual rip-up alone does not make the no-fallback transaction
+path legal on the original-legal guard set.  The transactional stage committed
+many safe easy reroutes, but endpoint-stable proposals cannot replace NTHU's
+hard serial reroute behavior on difficult nets.
+
+## Stage B Implementation: Deterministic Serial Repair
+
+The branch now adds `NTHU_TRANSACTIONAL_SERIAL_REPAIR`, default enabled.
+
+Flow:
+
+```text
+parallel transaction proposals
+deterministic serial transaction commit
+scan still-overflowing two-pins
+run original NTHU range_router() serially on those remaining hard cases
+```
+
+This is not a router-algorithm replacement. It keeps NTHU's hard-case reroute
+logic for nets that the safe transaction model could not resolve. The purpose is
+to preserve correctness while still extracting parallel work from easy overflow
+transactions.
+
+The log now reports:
+
+- `serial_repair`: remaining overflow two-pins repaired by original
+  `range_router()`;
+- `repair_skipped`: originally-overflow candidates that became clean before the
+  serial repair scan;
+- `repair_ms`: time spent in the deterministic hard-case repair phase.
+
 ## Correctness Contract
 
 - Worker threads do not mutate global congestion.
-- Global congestion is mutated only in deterministic commit order.
+- Global congestion is mutated only in deterministic commit order or in the
+  final serial NTHU repair phase.
 - A candidate accepted by the virtual view is not trusted blindly; it is checked
   again after serially removing the old path.
 - If the latest map invalidates the candidate, the old path is restored.
@@ -82,8 +131,7 @@ This is a Stage A repair, not the final multicore scheduler.
 - `MonotonicRouting` still uses the original `Congestion::get_cost_2d()` view.
   Its final candidate is checked with virtual rip-up, but its cost search is not
   fully transaction-aware yet.
-- No VM benchmark result is attached to this report yet. Per project rule,
-  build and benchmark validation must run on the VM.
+- Stage B still needs VM validation after the serial repair commit is pushed.
 
 ## Next Experiments
 
