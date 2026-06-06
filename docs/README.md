@@ -15,7 +15,7 @@ where a result came from.
 | Order | File | Purpose |
 | ---: | --- | --- |
 | 1 | `../reports/presentations/00-start-here.md` | Shortest path for preparing slides and backup material. |
-| 2 | `../reports/presentations/01-performance-and-score.md` | Headline speed, WL, overflow, and legality claims. |
+| 2 | `../reports/presentations/01-performance-and-score.md` | Problem setup, benchmark set, original runtime, main-branch bottleneck, and final speed/WL/overflow claims. |
 | 3 | `../reports/presentations/02-optimization-methods.md` | What each optimization did and why it helped or failed. |
 | 4 | `../reports/presentations/03-timeline-and-correctness.md` | Which results belong to which implementation period. |
 | 5 | `../reports/01-final-router-optimization-zh.md` | Full report for detailed explanation and backup slides. |

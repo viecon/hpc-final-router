@@ -10,9 +10,9 @@ evidence traceable.
 
 | Order | File | Why first |
 | ---: | --- | --- |
-| 1 | `01-performance-and-score.md` | Gives the headline numbers, legality guard, WL ratio, and speed trade-off. |
+| 1 | `01-performance-and-score.md` | Starts from the routing problem, benchmark set, original runtime, main-branch bottlenecks, and final speedup. |
 | 2 | `02-optimization-methods.md` | Explains what was changed in the router and why each method helped or failed. |
-| 3 | `03-timeline-and-correctness.md` | Separates early portfolios, VM probes, final one-strategy results, and rejected probes. |
+| 3 | `03-timeline-and-correctness.md` | Separates early portfolios, VM probes, final global-strategy results, and rejected probes. |
 | 4 | `../01-final-router-optimization-zh.md` | Full Chinese report for detailed explanations and backup slides. |
 | 5 | `../../docs/00-evidence-index.md` | Raw-data index when a number needs a dated source or VM result root. |
 
@@ -20,12 +20,18 @@ evidence traceable.
 
 For a short presentation:
 
-1. Problem and original performance pitfall.
-2. Final router strategy and legality guard.
-3. Main results: speedup, WL ratio, overflow, original-legal cases.
-4. Optimization methods: accepted, rejected, and why.
-5. Timeline guard: which numbers are final and which are exploratory.
-6. Future work: where speed is still blocked.
+1. What global routing is: connect nets on a capacity-limited grid.
+2. Why it matters: runtime, wirelength, overflow, and legal routing all matter.
+3. Benchmark set and original NTHU-Route runtime.
+4. What the `origin/main` docs already showed: the bottleneck is sequential
+   rip-up/reroute and repair effort, not simple reduction kernels.
+5. Current acceleration strategy: net-guided fast layer, adaptive repair,
+   high-overflow P2 budget, and edge-count priority.
+6. Original vs current result: runtime, WL ratio, overflow, and original-legal
+   cases.
+7. Why some faster rows are not the final claim: portfolios, high-WL rows, and
+   illegal runtime frontiers.
+8. Future work: where speed is still blocked.
 
 For a deeper technical presentation:
 
