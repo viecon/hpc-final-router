@@ -189,3 +189,29 @@ not a final-router candidate.
 
 No new paper claim is attached to this candidate. It is an internal frontier
 probe based on earlier VM strategy-matrix evidence.
+
+### VM Smoke Result
+
+Result root:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_edgecount_eb610bf_20260606T204740Z
+```
+
+| Strategy | Role | Benchmark | Seconds | Speedup vs original | WL ratio | Overflow |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `frontier_edgecount_shortp3_v1` | easy | `newblue2` | 41.562 | 1.841x | 1.869 | 0 / 0 |
+| `frontier_edgecount_shortp3_v1` | hard | `adaptec4` | 88.149 | 1.482x | 1.678 | 0 / 0 |
+
+Classification:
+
+- Runtime improved and no timeout occurred.
+- Both smoke cases remained legal.
+- WL is much too high; this is a runtime-frontier row, not a final candidate.
+
+Follow-up:
+
+- Test `frontier_edgecount_netguided_v2`, adding net-guided low-layer assignment
+  to the same short-P3 frontier.  If it retains most of the speed while reducing
+  WL, it becomes a promising direction.  If it loses most speed, the frontier is
+  mainly a fast-layer quality tradeoff.
