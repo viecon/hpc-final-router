@@ -356,6 +356,7 @@ Result roots:
 /home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_3c1c0e4_transactional_wave16
 /home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_3c1c0e4_transactional_wave32
 /home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_3c1c0e4_transactional_wave64_default
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_3e2c9b6_transactional_default_wave16
 ```
 
 | Proposal wave batches | Router s | WL | Overflow | First-call `proposal_waves` | First-call `propose_ms` | First-call `commit_rejected` |
@@ -369,7 +370,10 @@ Result roots:
 Wave scheduling confirms the expected tradeoff. Larger waves reduce OpenMP
 parallel-region overhead, but stale proposals increase commit rejection. On this
 case wave 16 is the best measured balance, so it is the default after the latest
-code change.
+code change. Final default validation at `3e2c9b6` without setting
+`NTHU_TRANSACTIONAL_PROPOSAL_WAVE_BATCHES` produced `47.173s`, WL `7716078`, and
+overflow `0`; the first log line reported `proposal_waves=719`, confirming the
+default wave size is 16.
 
 ## Current Status
 
@@ -382,7 +386,7 @@ transactional path is:
 - wave-based OpenMP proposal scheduling, default wave size 16.
 
 On `newblue2` it is legal and improves same-runner time from `53.122s` to
-`46.598s` (`1.14x`) with WL about `1.015x` of the no-transaction row. The
+`47.173s` (`1.13x`) with WL about `1.014x` of the no-transaction row. The
 remaining limit is that only reroute proposal is parallelized; interval
 construction, candidate query/sort, final commit, post-processing bookkeeping,
 and 3D assignment still keep average CPU far below 14 full cores.
