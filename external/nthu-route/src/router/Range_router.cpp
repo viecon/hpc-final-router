@@ -290,6 +290,10 @@ bool transactional_strict_maze_enabled() {
     return std::getenv("NTHU_TRANSACTIONAL_STRICT_MAZE") != nullptr;
 }
 
+bool transactional_conflict_graph_enabled() {
+    return std::getenv("NTHU_TRANSACTIONAL_CONFLICT_GRAPH") != nullptr;
+}
+
 int transactional_batch_limit() {
     const char* value = std::getenv("NTHU_TRANSACTIONAL_BATCH_LIMIT");
     if (value == nullptr || *value == '\0') {
@@ -1524,6 +1528,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         const bool try_l_shape = transactional_l_shape_enabled();
         const bool try_dogleg = transactional_dogleg_enabled();
         const bool try_strict_maze = transactional_strict_maze_enabled();
+        const bool use_conflict_graph = transactional_conflict_graph_enabled();
 
         std::unordered_map<int, Rectangle> net_path_boxes;
         net_path_boxes.reserve(construct_2d_tree.two_pin_list.size());
@@ -1650,43 +1655,57 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         const auto plan_start = ProfileClock::now();
         std::vector<TransactionBatch> open_batches;
         std::vector<TransactionBatch> planned_batches;
-        open_batches.reserve(batch_limit);
         planned_batches.reserve(std::max(1, transaction_count / std::max(1, batch_limit)));
-        for (int order = 0; order < static_cast<int>(remaining.size()); ++order) {
-            const RerouteCandidateBox& candidate = remaining[order];
-            bool placed = false;
-            for (auto batch_it = open_batches.begin(); batch_it != open_batches.end(); ++batch_it) {
-                if (!batch_can_accept(*batch_it, candidate)) {
-                    continue;
+        if (use_conflict_graph) {
+            open_batches.reserve(batch_limit);
+            for (int order = 0; order < static_cast<int>(remaining.size()); ++order) {
+                const RerouteCandidateBox& candidate = remaining[order];
+                bool placed = false;
+                for (auto batch_it = open_batches.begin(); batch_it != open_batches.end(); ++batch_it) {
+                    if (!batch_can_accept(*batch_it, candidate)) {
+                        continue;
+                    }
+                    add_to_batch(*batch_it, candidate);
+                    placed = true;
+                    if (static_cast<int>(batch_it->items.size()) >= batch_limit) {
+                        planned_batches.push_back(std::move(*batch_it));
+                        open_batches.erase(batch_it);
+                    }
+                    break;
                 }
-                add_to_batch(*batch_it, candidate);
-                placed = true;
-                if (static_cast<int>(batch_it->items.size()) >= batch_limit) {
-                    planned_batches.push_back(std::move(*batch_it));
-                    open_batches.erase(batch_it);
+                if (!placed) {
+                    TransactionBatch new_batch;
+                    new_batch.first_order = order;
+                    new_batch.items.reserve(batch_limit);
+                    new_batch.net_ids.reserve(batch_limit);
+                    add_to_batch(new_batch, candidate);
+                    if (batch_limit == 1) {
+                        planned_batches.push_back(std::move(new_batch));
+                    } else {
+                        open_batches.push_back(std::move(new_batch));
+                    }
                 }
-                break;
             }
-            if (!placed) {
+            for (TransactionBatch& candidate_batch : open_batches) {
+                planned_batches.push_back(std::move(candidate_batch));
+            }
+            std::sort(planned_batches.begin(), planned_batches.end(),
+                    [](const TransactionBatch& a, const TransactionBatch& b) {
+                        return a.first_order < b.first_order;
+                    });
+        } else {
+            for (int begin = 0; begin < static_cast<int>(remaining.size()); begin += batch_limit) {
                 TransactionBatch new_batch;
-                new_batch.first_order = order;
+                new_batch.first_order = begin;
                 new_batch.items.reserve(batch_limit);
                 new_batch.net_ids.reserve(batch_limit);
-                add_to_batch(new_batch, candidate);
-                if (batch_limit == 1) {
-                    planned_batches.push_back(std::move(new_batch));
-                } else {
-                    open_batches.push_back(std::move(new_batch));
+                const int end = std::min(static_cast<int>(remaining.size()), begin + batch_limit);
+                for (int i = begin; i < end; ++i) {
+                    add_to_batch(new_batch, remaining[i]);
                 }
+                planned_batches.push_back(std::move(new_batch));
             }
         }
-        for (TransactionBatch& candidate_batch : open_batches) {
-            planned_batches.push_back(std::move(candidate_batch));
-        }
-        std::sort(planned_batches.begin(), planned_batches.end(),
-                [](const TransactionBatch& a, const TransactionBatch& b) {
-                    return a.first_order < b.first_order;
-                });
         const double plan_ms = profile_ms(plan_start, ProfileClock::now());
 
 #ifdef NTHU_ROUTE_OPENMP
@@ -1785,10 +1804,11 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             range_profile.parallel_max_batch = std::max(range_profile.parallel_max_batch, max_batch_size);
         }
         if (do_profile || parallel_reroute_log_enabled()) {
-            log_sp->info("transactional reroute candidates={} overflow_candidates={} transaction_candidates={} skipped_by_limit={} batches={} parallel_batches={} serialized_batches={} proposed={} committed={} invalid={} commit_rejected={} clean_skipped={} max_batch={} max_workers={} batch_limit={} l_shape={} dogleg={} strict_maze={} fallback=0 plan_ms={:.3f} propose_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("transactional reroute candidates={} overflow_candidates={} transaction_candidates={} skipped_by_limit={} batches={} parallel_batches={} serialized_batches={} proposed={} committed={} invalid={} commit_rejected={} clean_skipped={} max_batch={} max_workers={} batch_limit={} scheduler={} l_shape={} dogleg={} strict_maze={} fallback=0 plan_ms={:.3f} propose_ms={:.3f} commit_ms={:.3f}",
                     twopin_list.size(), overflow_twopins.size(), transaction_count, skipped_by_limit,
                     batches, parallel_batches, serialized_batches, proposed, committed, invalid,
                     commit_rejected, clean_skipped, max_batch_size, max_workers_used, batch_limit,
+                    use_conflict_graph ? "conflict" : "chunk",
                     try_l_shape ? 1 : 0, try_dogleg ? 1 : 0, try_strict_maze ? 1 : 0,
                     plan_ms, propose_ms, commit_ms);
         }
