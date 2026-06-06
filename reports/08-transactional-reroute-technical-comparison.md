@@ -86,7 +86,7 @@ hard serial reroute behavior on difficult nets.
 
 ## Stage B Implementation: Deterministic Serial Repair
 
-The branch now adds `NTHU_TRANSACTIONAL_SERIAL_REPAIR`, default enabled.
+The branch adds `NTHU_TRANSACTIONAL_SERIAL_REPAIR`, default enabled.
 
 Flow:
 
@@ -109,6 +109,32 @@ The log now reports:
 - `repair_skipped`: originally-overflow candidates that became clean before the
   serial repair scan;
 - `repair_ms`: time spent in the deterministic hard-case repair phase.
+
+The first unbounded repair probe on `adaptec3` showed why this must be adaptive:
+
+```text
+commit=9d5b1ff
+first large batch:
+  serial_repair=116360
+  repair_ms=262589.405
+second small batch:
+  serial_repair=608
+  repair_ms=11457.776
+```
+
+The large repair does preserve NTHU hard-case semantics, but it serializes too
+much work and destroys the speed goal. Therefore the branch now bounds serial
+repair with:
+
+```text
+NTHU_TRANSACTIONAL_SERIAL_REPAIR_MAX_CANDIDATES
+default=5000
+```
+
+If the live overflow candidate count is above this threshold, the transaction
+stage logs `repair_deferred` and skips serial repair for that large batch. Small
+late batches still use original NTHU `range_router()` to clean hard residual
+overflow. This is a routing-state policy, not benchmark-name selection.
 
 ## Correctness Contract
 
