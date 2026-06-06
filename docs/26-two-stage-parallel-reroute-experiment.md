@@ -25,12 +25,17 @@ only by:
 export NTHU_TWO_STAGE_PARALLEL_REROUTE=1
 ```
 
-The experiment splits overflow reroute into two stages:
+The experiment splits overflow reroute into chunked two-stage rounds:
 
 | Stage | Parallel? | Global congestion mutation? | Work |
 | --- | --- | --- | --- |
-| Proposal | Yes, OpenMP per-thread scratch | No | Copy each overflow `Two_pin_element_2d`, try dogleg/L-shape/monotonic candidates against the current congestion snapshot, and keep only zero-overflow candidate paths. |
+| Proposal | Yes, OpenMP per-thread scratch | No | Copy each overflow `Two_pin_element_2d`, try L-shape/dogleg/monotonic candidates against the current congestion snapshot, and keep only zero-overflow candidate paths. |
 | Commit | No, deterministic serial order | Yes | Re-check the proposed path against the latest congestion, rip up the old path, update the twopin path, and insert the new path. |
+
+All overflow candidates are processed through proposal chunks. The chunk cap only
+limits proposal working-set size; it no longer sends the remaining tail directly
+to serial routing. Serial `range_router()` is reserved for proposal failures or
+commit-time conflicts.
 
 Maze reroute remains serial fallback. This is intentional: the maze path can
 adjust multi-terminal tree state, so it is not safe to run in the proposal phase
@@ -42,10 +47,10 @@ without a larger tree-transaction design.
 | --- | --- | --- |
 | `NTHU_TWO_STAGE_PARALLEL_REROUTE` | off | Enable the two-stage experiment. |
 | `NTHU_TWO_STAGE_BATCH_LIMIT` | `NTHU_PARALLEL_REROUTE_BATCH_LIMIT`, or OpenMP max threads | Cap proposal worker count. |
-| `NTHU_TWO_STAGE_MAX_CANDIDATES` | `NTHU_PARALLEL_REROUTE_MAX_CANDIDATES`, default 4096 | Cap how many overflow twopins enter the proposal stage per reroute call. |
+| `NTHU_TWO_STAGE_MAX_CANDIDATES` | `NTHU_PARALLEL_REROUTE_MAX_CANDIDATES`, default 4096 | Proposal chunk size. All overflow candidates are still processed chunk-by-chunk. |
 | `NTHU_TWO_STAGE_SERIAL_FALLBACK` | on | Route unresolved proposal failures through normal serial `range_router()`. |
-| `NTHU_TWO_STAGE_LSHAPE` | follows `NTHU_L_SHAPE_FASTPATH` | Enable/disable L-shape proposal candidates. |
-| `NTHU_TWO_STAGE_DOGLEG` | follows `NTHU_DOGLEG_FASTPATH` | Enable/disable dogleg proposal candidates. |
+| `NTHU_TWO_STAGE_LSHAPE` | on | Enable/disable L-shape proposal candidates. |
+| `NTHU_TWO_STAGE_DOGLEG` | on | Enable/disable dogleg proposal candidates. |
 
 ## Expected Comparison
 
@@ -71,7 +76,20 @@ Acceptance criteria for continuing this direction:
 - End-to-end runtime improves after including proposal overhead and serial
   fallback.
 
+## Initial Smoke
+
+`fa32290` first smoke on `newblue2` showed legality preserved but no speedup:
+
+| Variant | Seconds | WL | Overflow | Notes |
+| --- | ---: | ---: | ---: | --- |
+| `baseline_openmp14` | 44.307 | 8745387 | 0 | Same OpenMP build, two-stage off. |
+| `two_stage_openmp14` | 47.133 | 8757736 | 0 | L-shape/dogleg proposal off; almost all fallback. |
+| `two_stage_ld_openmp14` | 46.190 | 8753892 | 0 | L-shape/dogleg on; proposal useful but first implementation still sent tail to serial fallback. |
+
+This motivated the second implementation change: chunk all overflow candidates
+through the parallel proposal stage instead of only the first chunk.
+
 ## Status
 
-Pending VM build and benchmark. Do not treat this branch as part of the final
-router family until the VM result rows are appended here.
+Chunked implementation pending VM build and benchmark. Do not treat this branch
+as part of the final router family until the VM result rows are appended here.
