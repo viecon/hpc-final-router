@@ -30,7 +30,59 @@
 batch independent route proposals，先平行算 candidate，再用 deterministic order
 commit。
 
-## 投影片 3 - 方法地圖
+## 投影片 3 - Amdahl's law：可平行化比例有多小
+
+Amdahl's law：
+
+```text
+S(N) = 1 / ((1 - P) + P / N)
+```
+
+其中 `P` 是可平行化計算量比例，`N` 是核心數。這裡的 `P` 不用猜，而是從兩種
+實測資料來：
+
+- profiling 直接量到的可平行 scan/reduction 占比；
+- thread sweep 的實測 speedup 反推 effective `P`。
+
+### 直接 profiling 的 code-region 占比
+
+來源：`../../docs/32-gpu-feasibility-notes.md`,
+`../../docs/21-vm-multicore-utilization-log.md`
+
+| 來源 | 可安全直接平行化的範圍 | `P` | `S(12)` | `S(infinite)` |
+| --- | --- | ---: | ---: | ---: |
+| adaptec1 detailed profile | `pre_evaluate_congestion_cost` + `overflow` / `wirelength` reduction | 0.0285% | 1.000261x | 1.000285x |
+| newblue2 VM profile | 假設 `route_all` 以外全都可平行，這已經是很寬鬆上限 | <= 0.7574% | <= 1.006991x | <= 1.007632x |
+| adaptec3 VM profile | 假設 `route_all` 以外全都可平行，這已經是很寬鬆上限 | <= 0.1979% | <= 1.001817x | <= 1.001983x |
+
+這張表的意思是：如果只平行化目前容易平行的 analysis kernels，就算 12 cores 也
+幾乎不可能帶來可見的 end-to-end speedup。
+
+### 從實測 speedup 反推 effective `P`
+
+反推公式：
+
+```text
+P = (1 - 1 / S(N)) / (1 - 1 / N)
+```
+
+| 實測 row | 實測 speedup `S(N)` | 反推 effective `P` | `S(infinite)` |
+| --- | ---: | ---: | ---: |
+| newblue2, 1 -> 12 threads: 65.646939s -> 63.587045s | 1.032395x | 3.4231% | 1.035444x |
+| adaptec3, 1 -> 12 threads: 491.501180s -> 485.314663s | 1.012747x | 1.3731% | 1.013922x |
+| requested12 `OpenMP t4`: 12295.597s -> 11917.582s | 1.031719x | 4.0992% | 1.042744x |
+
+這裡的 effective `P` 是從整體 runtime 反推，會包含 measurement noise、cache
+effect、iteration variation，以及所有目前 OpenMP 造成的實際效果；它不是 source
+code line-by-line 的精準比例。即使如此，上限仍只有約 `1.014x` 到 `1.043x`。
+
+結論：
+
+> 直接可平行化的 scan/reduction 計算量太小；實測反推也顯示 current OpenMP
+> path 的 effective parallel fraction 只有幾個百分點。所以真正要接近多核加速，
+> 需要改成 batch route proposals，而不是只平行化現有 analysis kernels。
+
+## 投影片 4 - 方法地圖
 
 | 方法 | 目標 | 結果 |
 | --- | --- | --- |
@@ -44,7 +96,7 @@ commit。
 | `CUDA` scoring | candidate / maze scoring | sub-kernel 正確且快，end-to-end 弱。 |
 | Strict / bounded maze | 控制 `overflow` / `WL` | rejected 或 opt-in only。 |
 
-## 投影片 4 - Fast layer 實作
+## 投影片 5 - Fast layer 實作
 
 Layer assignment dispatcher 只有在環境變數打開時才走 fast path：
 
@@ -65,7 +117,7 @@ if (std::getenv("NTHU_FAST_GREEDY_LAYER") != nullptr) {
 - net-guided low-layer `WL<=1.2` legal7 portfolio：`1.961x`，avg/worst `WL`
   `1.125/1.163`。
 
-## 投影片 5 - Net-guided low-layer assignment
+## 投影片 6 - Net-guided low-layer assignment
 
 核心想法：
 
@@ -88,7 +140,7 @@ NTHU_NET_GUIDED_LOW_LAYER_FIRST=1
 - net-guided assignment 讓同一個 net 比較連續，減少 via 和 `WL` 成長；
 - 這是把早期 fast layer 從「很快但品質差」修成「仍快且品質可控」的關鍵。
 
-## 投影片 6 - Adaptive repair 實作
+## 投影片 7 - Adaptive repair 實作
 
 核心想法：
 
@@ -115,7 +167,7 @@ NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
 - requested12 clean run：`1.345x`，`WL` avg/worst `1.158/1.284`，
   `10/12` legal，total `overflow=166`。
 
-## 投影片 7 - Edge-count post-processing
+## 投影片 8 - Edge-count post-processing
 
 核心想法：
 
@@ -134,7 +186,7 @@ NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
 > 如果少做 repair，router 可以很快；真正困難的是在不留下 `overflow` 的情況下
 > 少做 repair。
 
-## 投影片 8 - 多核與 CUDA 的實驗教訓
+## 投影片 9 - 多核與 CUDA 的實驗教訓
 
 `OpenMP`：
 
@@ -155,7 +207,7 @@ NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
 > 目前這種直接 shared-state parallel reroute 或小 kernel offload，無法有效改善
 > end-to-end runtime。
 
-## 投影片 9 - Bounded-length 診斷
+## 投影片 10 - Bounded-length 診斷
 
 目標：
 
@@ -177,7 +229,7 @@ NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
 - 但 A2 慢 `2.557x`，A4 慢 `6.039x`；
 - 因此 final disabled，只保留 opt-in。
 
-## 投影片 10 - 保留與拒絕的方向
+## 投影片 11 - 保留與拒絕的方向
 
 Final 保留：
 

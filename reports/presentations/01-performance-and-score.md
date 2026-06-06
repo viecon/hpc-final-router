@@ -90,6 +90,19 @@ newblue1, newblue2, newblue5, newblue6
 order-sensitive。直接加 lock 會把它序列化；硬做 batch 則要付出 conflict
 detection、fallback、route order 變動的成本。
 
+Amdahl's law 可以把這件事量化：
+
+```text
+S(N) = 1 / ((1 - P) + P / N)
+```
+
+實測 profiling 中，`pre_evaluate_congestion_cost` + `overflow` / `wirelength`
+reduction 只佔 `0.0285%`，就算 12 cores 也只有 `1.000261x` 上限。從實測
+thread sweep 反推，current `OpenMP` path 的 effective `P` 也只有約
+`1.3731%` 到 `4.0992%`，無限多核心上限約 `1.014x` 到 `1.043x`。
+
+詳細計算放在 `02-optimization-methods.md` 的 Amdahl's law 投影片。
+
 ## 投影片 6 - 現在的加速方法
 
 最後版本使用同一套全域策略，不根據測資名稱 hardcode。
