@@ -27,7 +27,7 @@ keeps every original-legal case legal and has controlled WL.
 
 ## Slide 3 - Main vs Current Under Same CLI
 
-Source: `../main_vs_current_deep_comparison.md`
+Source: `../04-main-vs-final-router-comparison.md`
 
 | Metric | `main` 6f44073 | Current d1b7584 |
 | --- | ---: | ---: |
@@ -43,7 +43,7 @@ WL increases.
 
 ## Slide 4 - WL-Sensitive Legal Results
 
-Source: `../../docs/wl120_single_core_optimization_report.md`
+Source: `../../docs/24-wl120-single-core-results.md`
 
 | Portfolio | Scope | Speedup | Avg WL | Worst WL | Correctness |
 | --- | --- | ---: | ---: | ---: | --- |
@@ -56,8 +56,8 @@ the blocker.
 
 ## Slide 5 - Speed Frontier
 
-Source: `../../docs/current_router_comparison_report.md`,
-`../../docs/optimization_versions_report.md`
+Source: `../../docs/12-early-vm-speed-frontier.md`,
+`../../docs/20-vm-optimization-version-matrix.md`
 
 | Strategy | Scope | Speedup | WL | Correctness |
 | --- | --- | ---: | --- | --- |
@@ -91,6 +91,6 @@ Use this wording:
 
 Raw evidence:
 
-- `../../docs/raw_data_index.md`
-- `../optimization_methods_commit_summary.md`
-- `../final_router_optimization_report_zh.md`
+- `../../docs/00-evidence-index.md`
+- `../02-methods-by-commit-and-result.md`
+- `../01-final-router-optimization-zh.md`

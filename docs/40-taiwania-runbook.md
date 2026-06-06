@@ -19,7 +19,7 @@ experiment watcher at a time and expect it to wait if a teammate is using the
 group slot.
 
 After the disk-quota cleanup, prefer preserving source/docs/summary CSVs before
-rerunning. For rerun priority, see `docs/rerun_priority.md`.
+rerunning. For rerun priority, see `41-rerun-priority.md`.
 
 ## Files to Upload
 

@@ -98,7 +98,7 @@ utilization 幾乎為零。`adaptec3` 單 GPU costed path:
 
 | 方法 | 核心想法 | 代表 commit/report | 速度 | WL | 結果 |
 | --- | --- | --- | ---: | --- | --- |
-| OpenMP analysis kernels | 平行化 congestion scan、overflow/WL reduction。 | `docs/vm_multicore_optimization_log.md` | 12-case 約 1.03x | 約 1.000x | 正確但太小。 |
+| OpenMP analysis kernels | 平行化 congestion scan、overflow/WL reduction。 | `../docs/21-vm-multicore-utilization-log.md` | 12-case 約 1.03x | 約 1.000x | 正確但太小。 |
 | Conflict-aware multicore prototype | 嘗試把不衝突 two-pin reroute batch parallel。 | `db540bb`, `a5465c9`, `e648e19` | newblue2 default 65.739s, prototype best 80.255s | 類似 | CPU 提高但更慢。 |
 | Fast greedy layer assignment | 取代 expensive layer assignment。 | early docs | 12-case 1.59x | legal avg 1.743, worst 1.851 | 快但 WL 太高。 |
 | Net-guided low-layer assignment | 每個 net 有 preferred layer，優先低合法 layer。 | `7300fb7`, `53b1965` | legal7 WL<=1.2: 1.961x | avg 1.125, worst 1.163 | WL 控制有效。 |

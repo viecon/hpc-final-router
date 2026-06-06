@@ -63,7 +63,7 @@ NTHU_POST_SORT_MODE=edge_count
 ```
 
 with the adaptive repair budget env already documented in
-`reports/final_methods_wl_speed_research_log.md`.
+`05-wl-speed-literature-and-probes.md`.
 
 ## Full Final Recheck
 
@@ -95,7 +95,7 @@ Aggregate:
 | Max overflow | 2 |
 | Total WL | 146823361 |
 
-Against the original baseline from `reports/vm_router_optimization_report.md`:
+Against the original baseline from `03-final-vm-strategy-results.md`:
 
 | Metric | Original | Current recheck |
 | --- | ---: | ---: |

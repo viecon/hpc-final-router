@@ -7,7 +7,7 @@ Last updated: 2026-05-27
 The raw result directories and logs may be incomplete after disk cleanup, but the
 important final report evidence is still present:
 
-- `docs/final_experiment_report.md`
+- `10-early-source-strategy-report.md`
 - `results/bench16_strategy_matrix_r2_summary.csv`
 - `results/bench16_strategy_matrix_r2_speedups.csv`
 - `results/bench16_strategy_matrix_r2_speedup_matrix.csv`

@@ -181,5 +181,5 @@ Rejected or opt-in:
 
 Detailed source:
 
-- `../optimization_methods_commit_summary.md`
-- `../final_router_optimization_report_zh.md`
+- `../02-methods-by-commit-and-result.md`
+- `../01-final-router-optimization-zh.md`

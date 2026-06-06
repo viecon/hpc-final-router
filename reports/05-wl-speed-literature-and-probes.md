@@ -22,7 +22,7 @@ runs were done only on the VM.
 
 ### Current vs `origin/main`
 
-Source: `reports/main_vs_current_deep_comparison.md`
+Source: `04-main-vs-final-router-comparison.md`
 
 Same CLI budget, same VM, same requested 12 benchmarks:
 
@@ -47,7 +47,7 @@ Interpretation:
 
 ### Current vs Original Baseline
 
-Source: `reports/vm_router_optimization_report.md`
+Source: `03-final-vm-strategy-results.md`
 
 Requested 12:
 

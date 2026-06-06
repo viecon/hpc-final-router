@@ -20,11 +20,11 @@ and whether the result is a portfolio or one strategy.
 
 | Date | Main files | Strategy state | Safe claim |
 | --- | --- | --- | --- |
-| 2026-05-27 | `../../docs/final_experiment_report.md`, `../../docs/methods_and_results_summary.md` | Early source methods: OpenMP, fast layer, P2/P3, CUDA, edge-count. | adaptec1-3 legal NTHU speedup `2.325883x`; 16-case matrix as broad evidence. |
-| 2026-06-04 | `../../docs/wirelength_guard_speedup_report.md`, `../../docs/wl120_single_core_optimization_report.md`, `../../docs/overall_adaptive_router_report.md` | Net-guided low-layer and adaptive repair development. | WL<=1.2 legal7 `1.961x`; one-strategy legal7 `1.771x`. |
-| 2026-06-05 | `../vm_router_optimization_report.md`, `../main_vs_current_deep_comparison.md` | High-overflow P2 final family. | requested12 `1.345x`, legal7 `1.752x`, total overflow `166`. |
-| 2026-06-05 later | `../final_methods_wl_speed_research_log.md`, `../bounded_length_reroute_probe.md` | Layer-penalty and bounded-length probes. | negative results; final remains bounded off. |
-| 2026-06-06 | `../final_router_optimization_report_zh.md`, this deck set | Synthesis only. | no new benchmark rows. |
+| 2026-05-27 | `../../docs/10-early-source-strategy-report.md`, `../../docs/11-early-results-summary.md` | Early source methods: OpenMP, fast layer, P2/P3, CUDA, edge-count. | adaptec1-3 legal NTHU speedup `2.325883x`; 16-case matrix as broad evidence. |
+| 2026-06-04 | `../../docs/23-wl-guard-speedup.md`, `../../docs/24-wl120-single-core-results.md`, `../../docs/25-overall-adaptive-router-results.md` | Net-guided low-layer and adaptive repair development. | WL<=1.2 legal7 `1.961x`; one-strategy legal7 `1.771x`. |
+| 2026-06-05 | `../03-final-vm-strategy-results.md`, `../04-main-vs-final-router-comparison.md` | High-overflow P2 final family. | requested12 `1.345x`, legal7 `1.752x`, total overflow `166`. |
+| 2026-06-05 later | `../05-wl-speed-literature-and-probes.md`, `../06-bounded-length-reroute-probe.md` | Layer-penalty and bounded-length probes. | negative results; final remains bounded off. |
+| 2026-06-06 | `../01-final-router-optimization-zh.md`, this deck set | Synthesis only. | no new benchmark rows. |
 
 ## Slide 3 - Correctness Guard
 
@@ -87,12 +87,12 @@ When presenting a number, cite one of these:
 
 | Claim | Source |
 | --- | --- |
-| latest final-family requested12 `1.294x`, overflow `166` | `../bounded_length_reroute_probe.md` final recheck |
-| earlier clean selected requested12 `1.345x` | `../vm_router_optimization_report.md` |
-| current vs same-CLI main `1.677x` | `../main_vs_current_deep_comparison.md` |
-| WL<=1.2 legal7 `1.961x` | `../../docs/wl120_single_core_optimization_report.md` |
-| OpenMP/CUDA utilization | `../../docs/vm_multicore_optimization_log.md`, `../../docs/vm_cuda_optimization_log.md` |
-| method/commit map | `../optimization_methods_commit_summary.md` |
+| latest final-family requested12 `1.294x`, overflow `166` | `../06-bounded-length-reroute-probe.md` final recheck |
+| earlier clean selected requested12 `1.345x` | `../03-final-vm-strategy-results.md` |
+| current vs same-CLI main `1.677x` | `../04-main-vs-final-router-comparison.md` |
+| WL<=1.2 legal7 `1.961x` | `../../docs/24-wl120-single-core-results.md` |
+| OpenMP/CUDA utilization | `../../docs/21-vm-multicore-utilization-log.md`, `../../docs/22-vm-cuda-utilization-log.md` |
+| method/commit map | `../02-methods-by-commit-and-result.md` |
 
 ## Slide 8 - Final Statement
 
@@ -105,4 +105,4 @@ Recommended wording:
 
 Raw evidence map:
 
-- `../../docs/raw_data_index.md`
+- `../../docs/00-evidence-index.md`

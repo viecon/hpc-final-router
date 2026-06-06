@@ -12,11 +12,23 @@ execution is only for smoke tests.
 
 Read these first:
 
+- `reports/presentations/00-start-here.md`: shortest path for preparing slides.
+- `reports/presentations/01-performance-and-score.md`: headline speed, WL,
+  overflow, and legality claims.
+- `reports/presentations/02-optimization-methods.md`: optimization methods and
+  code-level changes.
+- `reports/presentations/03-timeline-and-correctness.md`: which result belongs
+  to which implementation period.
+- `reports/01-final-router-optimization-zh.md`: main Chinese final report.
+- `docs/00-evidence-index.md`: raw-data and report source index.
 - `docs/README.md`: documentation map and current evidence files.
-- `docs/final_experiment_report.md`: complete report draft.
-- `docs/methods_and_results_summary.md`: short result summary.
-- `docs/session_handoff.md`: current state after disk-quota cleanup.
-- `docs/rerun_priority.md`: what to rerun if fresh raw logs are needed.
+
+Historical raw evidence:
+
+- `docs/10-early-source-strategy-report.md`: early complete report draft.
+- `docs/11-early-results-summary.md`: early short result summary.
+- `docs/14-session-handoff-early-cleanup.md`: current state after disk-quota cleanup.
+- `docs/41-rerun-priority.md`: what to rerun if fresh raw logs are needed.
 
 Main legal NTHU source-code result:
 

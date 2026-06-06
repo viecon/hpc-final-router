@@ -6,19 +6,44 @@ This directory is now treated primarily as the raw-data and experiment-history
 side of the project.  Synthesized conclusions, method comparisons, and
 presentation-ready summaries live under `reports/`.
 
-Start from `raw_data_index.md`; it maps each report to the dated experiment
-period that produced it and prevents mixing rows from different implementation
-stages.
+Start from `../reports/presentations/00-start-here.md` if you are building
+slides. Start from `00-evidence-index.md` if you are checking raw evidence or
+where a result came from.
 
-## Read First
+## Presentation Reading Order
+
+| Order | File | Purpose |
+| ---: | --- | --- |
+| 1 | `../reports/presentations/00-start-here.md` | Shortest path for preparing slides and backup material. |
+| 2 | `../reports/presentations/01-performance-and-score.md` | Headline speed, WL, overflow, and legality claims. |
+| 3 | `../reports/presentations/02-optimization-methods.md` | What each optimization did and why it helped or failed. |
+| 4 | `../reports/presentations/03-timeline-and-correctness.md` | Which results belong to which implementation period. |
+| 5 | `../reports/01-final-router-optimization-zh.md` | Full report for detailed explanation and backup slides. |
+| 6 | `00-evidence-index.md` | Raw-data and result-root index for verification. |
+
+## Naming Convention
+
+| Prefix | Meaning |
+| --- | --- |
+| `docs/00-*` | Raw evidence index and source map. |
+| `docs/10-*` | Early source/Slurm-era experiment notes. |
+| `docs/20-*` | VM experiment, WL, multicore, and CUDA logs. |
+| `docs/30-*` | Design notes and source baselines. |
+| `docs/40-*` | Runbooks and rerun plans. |
+| `docs/90-*` | Old planning material. |
+| `reports/01-*` | Final synthesized report. |
+| `reports/02-*` to `06-*` | Supporting method, comparison, and probe reports. |
+| `reports/presentations/00-*` to `03-*` | Slide-oriented briefs. |
+
+## Read First For Evidence
 
 | File | Purpose |
 | --- | --- |
-| `raw_data_index.md` | Canonical map of raw evidence, report sources, result roots, chronology guards, and final presentation decks. |
-| `final_experiment_report.md` | Complete report draft: experiment method, original NTHU flow, strategy-by-strategy changes, code snippets, and comparison tables. |
-| `methods_and_results_summary.md` | Shorter result summary for slides or oral presentation. |
-| `session_handoff.md` | Current project state after result cleanup; use this when resuming work. |
-| `rerun_priority.md` | What to rerun if raw logs/results are required again. Current status: no rerun needed before preserving docs/source. |
+| `00-evidence-index.md` | Canonical map of raw evidence, report sources, result roots, chronology guards, and final presentation decks. |
+| `10-early-source-strategy-report.md` | Complete report draft: experiment method, original NTHU flow, strategy-by-strategy changes, code snippets, and comparison tables. |
+| `11-early-results-summary.md` | Shorter result summary for slides or oral presentation. |
+| `14-session-handoff-early-cleanup.md` | Current project state after result cleanup; use this when resuming work. |
+| `41-rerun-priority.md` | What to rerun if raw logs/results are required again. Current status: no rerun needed before preserving docs/source. |
 
 ## Synthesized Reports And Presentation Decks
 
@@ -27,22 +52,23 @@ than raw evidence. They are indexed here for navigation.
 
 | File | Purpose |
 | --- | --- |
-| `../reports/final_router_optimization_report_zh.md` | Main Chinese report: pitfalls, optimization methods, WL/speed impact, future work, issues, literature. |
-| `../reports/optimization_methods_commit_summary.md` | Method-family and commit-to-result summary. |
-| `../reports/presentations/performance_brief.md` | Slide-style brief grouped by performance and WL/correctness trade-off. |
-| `../reports/presentations/optimization_methods_brief.md` | Slide-style brief grouped by optimization method and code-level intervention. |
-| `../reports/presentations/timeline_correctness_brief.md` | Slide-style brief grouped by chronology, final/rejected states, and correctness guard. |
+| `../reports/01-final-router-optimization-zh.md` | Main Chinese report: pitfalls, optimization methods, WL/speed impact, future work, issues, literature. |
+| `../reports/02-methods-by-commit-and-result.md` | Method-family and commit-to-result summary. |
+| `../reports/presentations/00-start-here.md` | Slide preparation entry point. |
+| `../reports/presentations/01-performance-and-score.md` | Slide-style brief grouped by performance and WL/correctness trade-off. |
+| `../reports/presentations/02-optimization-methods.md` | Slide-style brief grouped by optimization method and code-level intervention. |
+| `../reports/presentations/03-timeline-and-correctness.md` | Slide-style brief grouped by chronology, final/rejected states, and correctness guard. |
 
 ## Experiment Notes
 
 | File | Purpose |
 | --- | --- |
-| `bench16_retest_plan.md` | Original 16-case retest plan and selected strategies. |
-| `nthu_gpu_feasibility.md` | GPU profiling, CUDA scorer results, and why end-to-end GPU gains are limited by sequential routing flow. |
-| `nthu_openmp_design.md` | OpenMP design notes and why analysis-kernel parallelism gave only small end-to-end speedup. |
-| `nthu_source_baselines.md` | Early source-baseline notes. |
-| `taiwania_runbook.md` | Taiwania/Slurm/Apptainer command reference. |
-| `report_outline.md` | Older outline. Keep as planning history; prefer `final_experiment_report.md` for current content. |
+| `13-bench16-retest-plan.md` | Original 16-case retest plan and selected strategies. |
+| `32-gpu-feasibility-notes.md` | GPU profiling, CUDA scorer results, and why end-to-end GPU gains are limited by sequential routing flow. |
+| `31-openmp-design-notes.md` | OpenMP design notes and why analysis-kernel parallelism gave only small end-to-end speedup. |
+| `33-source-baselines.md` | Early source-baseline notes. |
+| `40-taiwania-runbook.md` | Taiwania/Slurm/Apptainer command reference. |
+| `90-old-report-outline.md` | Older outline. Keep as planning history; prefer `10-early-source-strategy-report.md` for current content. |
 
 ## Current Evidence Files
 
