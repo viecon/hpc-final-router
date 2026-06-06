@@ -221,6 +221,51 @@ int parallel_reroute_max_candidates() {
     return parsed;
 }
 
+bool two_stage_parallel_reroute_enabled() {
+    return std::getenv("NTHU_TWO_STAGE_PARALLEL_REROUTE") != nullptr;
+}
+
+bool two_stage_serial_fallback_enabled() {
+    const char* value = std::getenv("NTHU_TWO_STAGE_SERIAL_FALLBACK");
+    return value == nullptr || *value == '\0' || std::atoi(value) != 0;
+}
+
+bool two_stage_l_shape_enabled() {
+    const char* value = std::getenv("NTHU_TWO_STAGE_LSHAPE");
+    if (value != nullptr && *value != '\0') {
+        return std::atoi(value) != 0;
+    }
+    return l_shape_fastpath_enabled();
+}
+
+bool two_stage_dogleg_enabled() {
+    const char* value = std::getenv("NTHU_TWO_STAGE_DOGLEG");
+    if (value != nullptr && *value != '\0') {
+        return std::atoi(value) != 0;
+    }
+    return dogleg_fastpath_enabled();
+}
+
+int two_stage_batch_limit() {
+    const char* value = std::getenv("NTHU_TWO_STAGE_BATCH_LIMIT");
+    if (value == nullptr || *value == '\0') {
+        return parallel_reroute_batch_limit();
+    }
+    return std::max(1, std::atoi(value));
+}
+
+int two_stage_max_candidates() {
+    const char* value = std::getenv("NTHU_TWO_STAGE_MAX_CANDIDATES");
+    if (value == nullptr || *value == '\0') {
+        return parallel_reroute_max_candidates();
+    }
+    const int parsed = std::atoi(value);
+    if (parsed <= 0) {
+        return std::numeric_limits<int>::max();
+    }
+    return parsed;
+}
+
 bool profile_enabled() {
     return std::getenv("NTHU_PROFILE") != nullptr;
 }
@@ -1406,6 +1451,187 @@ bool NTHUR::RangeRouter::try_dogleg_fastpath(Two_pin_element_2d& two_pin) {
 }
 
 void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*>& twopin_list, int version) {
+    if (two_stage_parallel_reroute_enabled() && twopin_list.size() > 1) {
+        struct TwoStageProposal {
+            std::vector<Coordinate_2d> path;
+            int old_overflow_score = 0;
+            int new_overflow_score = 0;
+            bool valid = false;
+        };
+
+        const bool do_profile = profile_enabled();
+        const auto reroute_start = ProfileClock::now();
+        std::vector<Two_pin_element_2d*> overflow_twopins;
+        overflow_twopins.reserve(twopin_list.size());
+        for (Two_pin_element_2d* two_pin : twopin_list) {
+            if (!congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false)) {
+                overflow_twopins.push_back(two_pin);
+            }
+        }
+        if (overflow_twopins.empty()) {
+            if (do_profile) {
+                range_profile.reroute_ms += profile_ms(reroute_start, ProfileClock::now());
+            }
+            return;
+        }
+
+        const int max_parallel_candidates = two_stage_max_candidates();
+        const int parallel_count = std::min(static_cast<int>(overflow_twopins.size()), max_parallel_candidates);
+        std::vector<Two_pin_element_2d*> serial_tail;
+        if (parallel_count < static_cast<int>(overflow_twopins.size())) {
+            serial_tail.assign(overflow_twopins.begin() + parallel_count, overflow_twopins.end());
+        }
+
+        const bool try_l_shape = two_stage_l_shape_enabled();
+        const bool try_dogleg = two_stage_dogleg_enabled();
+        const bool serial_fallback_enabled = two_stage_serial_fallback_enabled();
+        std::vector<TwoStageProposal> proposals(parallel_count);
+
+        auto accept_trial = [&](const Two_pin_element_2d& source,
+                const std::vector<Coordinate_2d>& candidate_path,
+                TwoStageProposal& proposal) -> bool {
+            if (candidate_path.size() < 2 || candidate_path == source.path) {
+                return false;
+            }
+            if (!congestion.check_path_no_overflow(candidate_path, source.net_id, true)) {
+                return false;
+            }
+            const int new_overflow_score =
+                    inserted_path_overflow_score(candidate_path, source.net_id, congestion);
+            if (new_overflow_score > 0) {
+                return false;
+            }
+            proposal.path = candidate_path;
+            proposal.new_overflow_score = new_overflow_score;
+            proposal.valid = true;
+            return true;
+        };
+
+        auto make_proposal = [&](int index, MonotonicRouting& local_monotonic) {
+            Two_pin_element_2d* source = overflow_twopins[index];
+            TwoStageProposal& proposal = proposals[index];
+            proposal.old_overflow_score = path_overflow_score(*source, congestion);
+
+            if (try_dogleg && proposal.old_overflow_score >= dogleg_min_overflow_score()) {
+                Two_pin_element_2d trial(*source);
+                if (try_dogleg_fastpath(trial) && accept_trial(*source, trial.path, proposal)) {
+                    return;
+                }
+            }
+
+            if (try_l_shape) {
+                Two_pin_element_2d trial(*source);
+                if (try_l_shape_fastpath(trial) && accept_trial(*source, trial.path, proposal)) {
+                    return;
+                }
+            }
+
+            Two_pin_element_2d trial(*source);
+            Bound bound;
+            std::vector<Coordinate_2d> bound_path(trial.path);
+            if (local_monotonic.monotonicRoute(trial, bound, bound_path)) {
+                const std::vector<Coordinate_2d>& candidate_path =
+                        trial.path.empty() ? bound_path : trial.path;
+                (void) accept_trial(*source, candidate_path, proposal);
+            }
+        };
+
+#ifdef NTHU_ROUTE_OPENMP
+        const int max_threads = std::max(1, omp_get_max_threads());
+        const int configured_limit = two_stage_batch_limit();
+        const int batch_limit = configured_limit > 0 ? std::min(configured_limit, max_threads) : max_threads;
+        const int workers = std::max(1, std::min(batch_limit, parallel_count));
+#pragma omp parallel num_threads(workers)
+        {
+            MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
+#pragma omp for schedule(dynamic, 1)
+            for (int i = 0; i < parallel_count; ++i) {
+                make_proposal(i, local_monotonic);
+            }
+        }
+#else
+        const int workers = 1;
+        const int batch_limit = 1;
+        MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
+        for (int i = 0; i < parallel_count; ++i) {
+            make_proposal(i, local_monotonic);
+        }
+#endif
+
+        int proposed = 0;
+        int committed = 0;
+        int invalid = 0;
+        int commit_skipped = 0;
+        int serial_fallback = 0;
+        int serial_tail_routed = 0;
+        for (const TwoStageProposal& proposal : proposals) {
+            if (proposal.valid) {
+                ++proposed;
+            }
+        }
+
+        for (int i = 0; i < parallel_count; ++i) {
+            Two_pin_element_2d* two_pin = overflow_twopins[i];
+            const TwoStageProposal& proposal = proposals[i];
+            const bool still_overflow =
+                    !congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false);
+            if (!still_overflow) {
+                ++commit_skipped;
+                continue;
+            }
+            if (proposal.valid &&
+                    congestion.check_path_no_overflow(proposal.path, two_pin->net_id, true)) {
+                construct_2d_tree.NetDirtyBit[two_pin->net_id] = true;
+                ++total_twopin;
+                congestion.update_congestion_map_remove_two_pin_net(two_pin->path, two_pin->net_id);
+                two_pin->path = proposal.path;
+                two_pin->pin1 = two_pin->path.front();
+                two_pin->pin2 = two_pin->path.back();
+                if (version == 2) {
+                    two_pin->done = construct_2d_tree.done_iter;
+                }
+                congestion.update_congestion_map_insert_two_pin_net(*two_pin);
+                ++committed;
+                continue;
+            }
+
+            if (proposal.valid) {
+                ++commit_skipped;
+            } else {
+                ++invalid;
+            }
+            if (serial_fallback_enabled &&
+                    !congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false)) {
+                range_router(*two_pin, version);
+                ++serial_fallback;
+            }
+        }
+
+        if (serial_fallback_enabled) {
+            for (Two_pin_element_2d* two_pin : serial_tail) {
+                if (!congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false)) {
+                    range_router(*two_pin, version);
+                    ++serial_tail_routed;
+                }
+            }
+        }
+
+        if (do_profile) {
+            range_profile.reroute_ms += profile_ms(reroute_start, ProfileClock::now());
+            range_profile.parallel_inputs += parallel_count;
+            range_profile.parallel_serialized_inputs += serial_fallback + serial_tail_routed;
+            range_profile.parallel_max_batch = std::max(range_profile.parallel_max_batch, parallel_count);
+        }
+        if (do_profile || parallel_reroute_log_enabled()) {
+            log_sp->info("two-stage parallel reroute candidates={} overflow_candidates={} parallel_candidates={} proposed={} committed={} invalid={} commit_skipped={} serial_fallback={} serial_tail={} serial_tail_routed={} workers={} batch_limit={} l_shape={} dogleg={} fallback={}",
+                    twopin_list.size(), overflow_twopins.size(), parallel_count, proposed, committed,
+                    invalid, commit_skipped, serial_fallback, serial_tail.size(), serial_tail_routed,
+                    workers, batch_limit, try_l_shape ? 1 : 0, try_dogleg ? 1 : 0,
+                    serial_fallback_enabled ? 1 : 0);
+        }
+        return;
+    }
+
 #ifdef NTHU_ROUTE_OPENMP
     if (parallel_reroute_batches_enabled() && twopin_list.size() > 1) {
         const bool do_profile = profile_enabled();

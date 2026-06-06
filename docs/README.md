@@ -64,6 +64,7 @@ than raw evidence. They are indexed here for navigation.
 | File | Purpose |
 | --- | --- |
 | `13-bench16-retest-plan.md` | Original 16-case retest plan and selected strategies. |
+| `26-two-stage-parallel-reroute-experiment.md` | Branch-specific two-stage reroute parallelization experiment and VM benchmark plan. |
 | `32-gpu-feasibility-notes.md` | GPU profiling, CUDA scorer results, and why end-to-end GPU gains are limited by sequential routing flow. |
 | `31-openmp-design-notes.md` | OpenMP design notes and why analysis-kernel parallelism gave only small end-to-end speedup. |
 | `33-source-baselines.md` | Early source-baseline notes. |

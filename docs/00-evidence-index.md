@@ -47,6 +47,7 @@ explicitly stated.
 | 2026-06-04 VM utilization and WL-guard runs | `20-vm-optimization-version-matrix.md`, `21-vm-multicore-utilization-log.md`, `22-vm-cuda-utilization-log.md`, `23-wl-guard-speedup.md`, `24-wl120-single-core-results.md`, `25-overall-adaptive-router-results.md` | VM-only profiling and strategy sweeps. Low-layer net-guided assignment and one-strategy adaptive repair were introduced. | VM-only legal7/requested12 comparisons; use these for utilization and WL<=1.2/WL<=1.5 claims. |
 | 2026-06-05 final VM strategy reports | `../reports/03-final-vm-strategy-results.md`, `../reports/04-main-vs-final-router-comparison.md`, `../reports/05-wl-speed-literature-and-probes.md`, `../reports/06-bounded-length-reroute-probe.md`, `../reports/02-methods-by-commit-and-result.md` | High-overflow adaptive P2 budget, strict maze negative results, layer-penalty probe, bounded-length probe. | Current one-strategy final family, same-CLI main comparison, and final rejected/accepted method accounting. |
 | 2026-06-06 final writeup | `../reports/01-final-router-optimization-zh.md`, `../reports/presentations/*.md` | Synthesized from the earlier evidence. No new benchmark rows. | Use for oral presentation/writeup; trace raw numbers back to the dated files above. |
+| 2026-06-06 two-stage parallel reroute experiment | `26-two-stage-parallel-reroute-experiment.md` | Separate branch `experiment-two-stage-parallel-reroute`; proposal/commit split for reroute parallelization. | Experimental only. Compare only against same-branch runs with and without `NTHU_TWO_STAGE_PARALLEL_REROUTE=1`. |
 
 ## Raw / Historical Evidence Files
 
@@ -76,6 +77,7 @@ explicitly stated.
 | `23-wl-guard-speedup.md` | Net-guided fast layer WL<=1.5 legal7 portfolio. | Quality-sensitive speedup with controlled WL. |
 | `24-wl120-single-core-results.md` | WL<=1.2 legal7 portfolio and illegal speed frontier. | Showing the speed/legal/WL trade-off. |
 | `25-overall-adaptive-router-results.md` | One overall strategy without testcase-name hardcoding. | Explaining adaptive repair logic and why speed target was not reached. |
+| `26-two-stage-parallel-reroute-experiment.md` | Branch-specific two-stage parallel reroute experiment. | Testing whether proposal/serial-commit split improves multicore utilization without unsafe concurrent congestion updates. |
 
 ### Final Synthesized Reports
 
