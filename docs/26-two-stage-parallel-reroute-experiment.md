@@ -101,7 +101,59 @@ This motivated two follow-up implementation changes:
 - defer serial fallback until after all proposal chunks, with timing logs for
   proposal/commit/fallback.
 
+## Router-Only Profile After Deferred Fallback
+
+Commit: `288af0e`
+
+Result roots on the VM:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_288af0e_baseline
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/router_only_20260606_288af0e_two_stage
+```
+
+Both rows use the same OpenMP build and `OMP_NUM_THREADS=14`. The reported
+seconds and CPU samples are for the `NthuRoute` process only; Lab2 verifier runs
+afterward and is not included in the router CPU samples.
+
+| Variant | Router s | Avg CPU | Max CPU | Live threads avg/max | WL | Overflow |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline OpenMP14 | 43.849 | 102.643% | 108.000% | 9.976 / 14 | 8747566 | 0 |
+| two-stage deferred | 43.753 | 116.024% | 133.000% | 9.976 / 14 | 8741767 | 0 |
+
+Observed speedup is only `43.849 / 43.753 = 1.002x`. The result is legal and WL
+is not worse on this case, but the multicore gain is effectively negligible.
+
+Two-stage phase totals from `two-stage parallel reroute` logs:
+
+| Metric | Total |
+| --- | ---: |
+| `parallel_candidates` | 227221 |
+| `proposed` | 49002 |
+| `committed` | 12909 |
+| `fallback_queued` | 131969 |
+| `fallback_skipped` | 108188 |
+| `serial_fallback` | 23781 |
+| `proposal_ms` | 356.272 |
+| `commit_ms` | 259.454 |
+| `fallback_ms` | 7423.071 |
+
+Measured Amdahl fraction for the forced-parallel proposal phase:
+
+```text
+P = proposal_ms / router_seconds = 0.356272 / 43.752587 = 0.00814
+S_14 = 1 / ((1 - P) + P / 14) = 1.0076x
+S_infinite = 1 / (1 - P) = 1.0082x
+```
+
+This is why the process can show 14 live threads but still average only about
+one core. The part made parallel by this experiment is too small; the runtime is
+still dominated by serial fallback, route order, and congestion/tree mutation.
+
 ## Status
 
-Chunked implementation pending VM build and benchmark. Do not treat this branch
-as part of the final router family until the VM result rows are appended here.
+The branch is useful as a negative/diagnostic experiment, not as a final router
+strategy. It proves that merely moving cheap candidate proposal to OpenMP does
+not create enough parallel work; a real multicore gain would need to parallelize
+the expensive fallback/maze path with a transaction-safe tree and congestion
+commit model.
