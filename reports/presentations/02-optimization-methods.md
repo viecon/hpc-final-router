@@ -1,35 +1,52 @@
-# Optimization Methods Brief
+# 優化方法簡報
 
-Date: 2026-06-06
+日期：2026-06-06
 
-## Slide 1 - Original Pitfalls
+## 投影片 1 - 原始 router 的效能問題
 
-The original router has five practical bottlenecks:
+原始 NTHU-Route 的效能問題不是單一函式慢，而是 routing flow 裡有幾個互相影響
+的 bottleneck：
 
-- rip-up/reroute mutates shared congestion state sequentially,
-- fixed P2/P3 budgets do not adapt to measured overflow,
-- layer assignment is expensive, but naive fast layer inflates WL,
-- post-processing can be fast only by leaving overflow,
-- CUDA work units are too small relative to CPU routing.
+- `rip-up/reroute` 會 sequentially 修改 shared `congestion map`；
+- 固定 `P2/P3` budget 不會根據實際 `overflow` 狀態調整；
+- 原始 layer assignment 較慢，但 naive fast layer 會讓 `wirelength` 變大；
+- `post-processing` 可以很快，但太早停會留下 `overflow`；
+- `CUDA` work units 太小，放進整體 CPU routing loop 後利用率很低。
 
-## Slide 2 - Method Map
+## 投影片 2 - Routing pipeline 與平行化判斷
 
-| Method | Target | Result |
+這張用來回答「為什麼不能直接平行化」。
+
+| 階段 | 做什麼 | 平行化判斷 |
 | --- | --- | --- |
-| OpenMP analysis kernels | CPU scan/reduction speed | correct, about 1.03x only |
-| Conflict-aware reroute batches | real multicore routing | higher CPU, slower |
-| Fast greedy layer | layer assignment time | fast, WL too high |
-| Net-guided low-layer | WL control | selected WL direction |
-| Adaptive legal repair | original-legal correctness | selected |
-| High-overflow P2 budget | hard-case overflow | selected |
-| Edge-count post | runtime frontier | useful but mostly illegal |
-| CUDA scoring | candidate/maze scoring | correct sub-kernel, weak end-to-end |
-| Strict/bounded maze | overflow/WL control | rejected or opt-in only |
+| 1. Input / tree construction | 讀 `.gr`、建 FLUTE/two-pin tree。 | 可以做一些平行，但不是 runtime 主因。 |
+| 2. Congestion analysis | 掃 edge demand、算 `overflow`、算 `wirelength`。 | 最容易平行；我們做過 `OpenMP`，但 end-to-end 只有約 `1.03x`。 |
+| 3. `P2 rip-up/reroute` | 移除舊 path、找新 path、更新 shared `congestion map`。 | 最難平行；route order 會改變後續 cost，lock 又會接近 serial。 |
+| 4. `P3 post-processing` | 挑 overflow candidates 再修。 | scoring 可平行，commit 仍受 shared state 和 conflict 影響。 |
+| 5. Layer assignment | 把 2D route 映射到 metal layers。 | 改演算法比加 thread 有效；我們用 net-guided fast layer。 |
+| 6. Output / verify | 輸出 route，跑 checker。 | 可平行但占比小，不是主要加速點。 |
 
-## Slide 3 - Fast Layer Implementation
+結論：真正要多核化，不能只是 `#pragma omp parallel for`。比較合理的未來方向是
+batch independent route proposals，先平行算 candidate，再用 deterministic order
+commit。
 
-The layer assignment dispatcher chooses fast assignment only when explicitly
-enabled:
+## 投影片 3 - 方法地圖
+
+| 方法 | 目標 | 結果 |
+| --- | --- | --- |
+| `OpenMP` analysis kernels | 加速 CPU scan/reduction | 正確，但大約只有 `1.03x`。 |
+| Conflict-aware reroute batches | 嘗試真正多核 reroute | CPU 利用率變高，但更慢。 |
+| Fast greedy layer | 降低 layer assignment time | 很快，但 `WL` 太高。 |
+| Net-guided low-layer | 控制 `WL` | 被保留為 final 方向。 |
+| Adaptive legal repair | 保住原本合法 cases | 被保留。 |
+| High-overflow `P2` budget | 修 hard-case `overflow` | 被保留。 |
+| Edge-count post | runtime frontier | 有診斷價值，但多數 illegal。 |
+| `CUDA` scoring | candidate / maze scoring | sub-kernel 正確且快，end-to-end 弱。 |
+| Strict / bounded maze | 控制 `overflow` / `WL` | rejected 或 opt-in only。 |
+
+## 投影片 4 - Fast layer 實作
+
+Layer assignment dispatcher 只有在環境變數打開時才走 fast path：
 
 ```cpp
 if (std::getenv("NTHU_FAST_GREEDY_LAYER") != nullptr) {
@@ -41,23 +58,23 @@ if (std::getenv("NTHU_FAST_GREEDY_LAYER") != nullptr) {
 }
 ```
 
-Impact:
+效果：
 
-- plain fast layer: requested12 `1.59x`, but original-legal WL avg/worst
-  `1.743/1.851`;
-- net-guided low-layer WL<=1.2 legal7 portfolio: `1.961x`, avg/worst WL
-  `1.125/1.163`.
+- plain fast layer：requested12 約 `1.59x`，但 original-legal `WL` avg/worst
+  `1.743/1.851`，品質太差；
+- net-guided low-layer `WL<=1.2` legal7 portfolio：`1.961x`，avg/worst `WL`
+  `1.125/1.163`。
 
-## Slide 4 - Net-Guided Low-Layer Assignment
+## 投影片 5 - Net-guided low-layer assignment
 
-Main idea:
+核心想法：
 
-- build per-net edge lists,
-- score candidate layers with continuity and overflow penalties,
-- prefer low legal layers when `NTHU_NET_GUIDED_LOW_LAYER_FIRST=1`,
-- use congestion fallback only when needed.
+- 建立每個 net 的 edge list；
+- 用 continuity 和 `overflow` penalty 評分 candidate layers；
+- `NTHU_NET_GUIDED_LOW_LAYER_FIRST=1` 時，優先選低且合法的 layer；
+- 只有必要時才用 congested fallback。
 
-Key knobs:
+關鍵設定：
 
 ```text
 NTHU_FAST_GREEDY_LAYER=1
@@ -65,22 +82,23 @@ NTHU_FAST_GREEDY_LAYER_NET_GUIDED=1
 NTHU_NET_GUIDED_LOW_LAYER_FIRST=1
 ```
 
-Why it helped:
+為什麼有效：
 
-- plain fast greedy chose layers edge-by-edge;
-- net-guided assignment keeps one net on fewer layers and reduces via/WL growth.
+- plain fast greedy 是 edge-by-edge 選 layer，容易讓同一個 net 分散到太多 layer；
+- net-guided assignment 讓同一個 net 比較連續，減少 via 和 `WL` 成長；
+- 這是把早期 fast layer 從「很快但品質差」修成「仍快且品質可控」的關鍵。
 
-## Slide 5 - Adaptive Repair Implementation
+## 投影片 6 - Adaptive repair 實作
 
-Main idea:
+核心想法：
 
-- run a short initial repair,
-- measure overflow,
-- if overflow remains, continue P2 from the completed iteration,
-- if overflow is high, raise P2 max iteration,
-- if overflow is small, cap extra repair to avoid over-repair.
+- 先跑短的 initial repair；
+- 量測目前 `overflow`；
+- 如果仍有 `overflow`，從已完成的 iteration 繼續 `P2`；
+- 如果 `overflow` 很高，才提高 `P2 max iteration`；
+- 如果 `overflow` 很小，限制額外 repair，避免 over-repair。
 
-Key env:
+關鍵設定：
 
 ```text
 NTHU_ADAPTIVE_LEGAL_REPAIR=1
@@ -91,95 +109,93 @@ NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_LIMIT=50
 NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
 ```
 
-Impact:
+效果：
 
-- legal7 clean run: `1.752x`, WL avg/worst `1.118/1.151`, `7/7` legal;
-- requested12 clean run: `1.345x`, WL avg/worst `1.158/1.284`,
-  `10/12` legal, total overflow `166`.
+- legal7 clean run：`1.752x`，`WL` avg/worst `1.118/1.151`，`7/7` legal；
+- requested12 clean run：`1.345x`，`WL` avg/worst `1.158/1.284`，
+  `10/12` legal，total `overflow=166`。
 
-## Slide 6 - Edge-Count Post-Processing
+## 投影片 7 - Edge-count post-processing
 
-Main idea:
+核心想法：
 
-- count overflow edges touched by each candidate,
-- sort candidates by overflow edge count, max overflow, and total overflow,
-- spend repair time on denser overflow candidates first.
+- 統計每個 candidate 會碰到多少 overflow edges；
+- 依 overflow edge count、max overflow、total overflow 排序；
+- 把有限 reroute effort 先花在比較密集的 overflow 區域。
 
-Impact:
+效果：
 
-- requested12 speed frontier: `5.38x`;
-- 16-case matrix median speedup: `4.331x`;
-- legal coverage poor, so it is not a final legal strategy.
+- requested12 runtime frontier：`5.38x`；
+- 16-case matrix median speedup：`4.331x`；
+- 但 legal coverage 很差，所以不能當 final legal strategy。
 
-Use this as an ablation:
+這個實驗的價值是：
 
-> The router can be much faster if we stop repair early; the hard part is doing
-> so without leaving overflow.
+> 如果少做 repair，router 可以很快；真正困難的是在不留下 `overflow` 的情況下
+> 少做 repair。
 
-## Slide 7 - Multicore and CUDA Lessons
+## 投影片 8 - 多核與 CUDA 的實驗教訓
 
-OpenMP:
+`OpenMP`：
 
-- scans/reductions parallelized correctly,
-- route mutation loop remains sequential,
-- conflict-aware prototype increased CPU use but changed route order and was
-  slower.
+- scan/reduction kernels 可以正確平行；
+- 但主要 runtime 在 `P2/P3 rip-up/reroute` 的 shared-state mutation；
+- conflict-aware prototype 有提高 CPU 使用率，但 route order、conflict check、
+  serial fallback 讓它更慢。
 
-CUDA:
+`CUDA`：
 
-- standalone scorer fast,
-- integrated CUDA accounts for about one second inside a roughly 195-second A3
-  route,
-- dual GPU did not improve single-case latency.
+- standalone scorer 很快；
+- 但整合進 router 後，GPU work 被很多小 kernel 和 CPU sequential commit 切碎；
+- dual GPU 對 single-case latency 幾乎沒有幫助。
 
-Conclusion:
+結論：
 
-> Future parallel work must batch independent route proposals and commit them
-> deterministically.  Small kernels and direct shared-state parallelism do not
-> move end-to-end runtime.
+> 未來要平行化，方向應該是 batch route proposals + deterministic commit。
+> 目前這種直接 shared-state parallel reroute 或小 kernel offload，無法有效改善
+> end-to-end runtime。
 
-## Slide 8 - Bounded-Length Diagnosis
+## 投影片 9 - Bounded-length 診斷
 
-Goal:
+目標：
 
-- reduce detour/WL by rejecting over-length maze paths.
+- 避免 maze route 產生太長 detour，降低 `WL`。
 
-What failed:
+失敗點：
 
-- first implementation rolled back `two_pin.path` after `mm_maze_route_p()` had
-  already mutated the tree;
-- full12 bounded probe failed `12/12`.
+- 第一版在 `mm_maze_route_p()` 已經 mutate tree 後才 rollback `two_pin.path`；
+- full12 bounded probe 變成 `12/12` fail。
 
-Safe fix:
+安全修法：
 
-- pass `max_path_edges` into `MM_mazeroute`;
-- reject before `adjust_twopin_element()`.
+- 把 `max_path_edges` 傳進 `MM_mazeroute`；
+- 在 `adjust_twopin_element()` 前就 reject。
 
-Result:
+結果：
 
-- A2/A4 smoke legal and slightly lower WL;
-- A2 `2.557x` slower, A4 `6.039x` slower;
-- keep opt-in, final disabled.
+- A2/A4 smoke legal，`WL` 略降；
+- 但 A2 慢 `2.557x`，A4 慢 `6.039x`；
+- 因此 final disabled，只保留 opt-in。
 
-## Slide 9 - Accepted vs Rejected
+## 投影片 10 - 保留與拒絕的方向
 
-Accepted in final family:
+Final 保留：
 
-- net-guided low-layer fast layer,
-- adaptive legal repair,
-- high-overflow P2 budget,
-- edge-count ordering as a controlled candidate priority.
+- net-guided low-layer fast layer；
+- adaptive legal repair；
+- high-overflow `P2` budget；
+- edge-count ordering 作為受控 candidate priority。
 
-Rejected or opt-in:
+拒絕或 opt-in 的方向：
 
-- OpenMP scans as final speed claim,
-- conflict-aware reroute prototype,
-- CUDA single/dual GPU as final path,
-- strict legal maze,
-- bounded-length reject-only guard,
-- layer penalty tuning.
+- 把 `OpenMP` scan 當 final speed claim；
+- conflict-aware reroute prototype；
+- `CUDA` single/dual GPU 作為 final path；
+- strict legal maze；
+- bounded-length reject-only guard；
+- layer penalty tuning。
 
-Detailed source:
+詳細來源：
 
 - `../02-methods-by-commit-and-result.md`
 - `../01-final-router-optimization-zh.md`
