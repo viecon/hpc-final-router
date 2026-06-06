@@ -11,9 +11,10 @@
 | ---: | --- | --- |
 | 1 | `01-performance-and-score.md` | 從 `global routing` 問題、測資、原始速度、`main` bottleneck 講到最後 speedup。 |
 | 2 | `02-optimization-methods.md` | 說明實際改了哪些 router 邏輯，以及為什麼有些優化有效、有些無效。 |
-| 3 | `03-timeline-and-correctness.md` | 區分早期 portfolio、VM probe、最後單一全域策略，以及被拒絕的實驗。 |
+| 3 | `03-timeline-and-correctness.md` | 區分早期 diagnostic portfolio、VM probe、最後單一全域策略，以及被拒絕的實驗。 |
 | 4 | `../01-final-router-optimization-zh.md` | 完整中文報告，可拿來做詳細說明或備用投影片。 |
-| 5 | `../../docs/00-evidence-index.md` | 要查某個數字的時間、commit、VM result root 時看這份。 |
+| 5 | `../07-scoring-methodology.md` | 先確認 score 定義：同一 config 的 total-time speedup，geomean 只作輔助。 |
+| 6 | `../../docs/00-evidence-index.md` | 要查某個數字的時間、commit、VM result root 時看這份。 |
 
 ## 簡報主線
 
@@ -29,7 +30,7 @@
 6. 說明目前加速策略：net-guided fast layer、adaptive repair、
    high-overflow `P2` budget、edge-count priority。
 7. 比較原本與加速後的 runtime、`WL ratio`、`overflow`、原本合法 case 是否保持合法。
-8. 說明為什麼有些更快結果不能當 final claim：portfolio、高 `WL`、illegal
+8. 說明為什麼有些更快結果不能當正式 score：diagnostic portfolio、高 `WL`、illegal
    runtime frontier。
 9. 收斂到未來工作：真正的多核/GPU 需要 batching route proposals，不能只加
    `OpenMP pragma` 或多開 GPU。

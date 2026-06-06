@@ -375,6 +375,40 @@ code change. Final default validation at `3e2c9b6` without setting
 overflow `0`; the first log line reported `proposal_waves=719`, confirming the
 default wave size is 16.
 
+## Legal7 Smoke
+
+Commit `fb9b17d` was checked on the original-legal 7 set with the same
+transactional wave16 config:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_two_stage_parallel/legal7_wave16_fb9b17d_20260606T121628Z
+```
+
+Config:
+
+```text
+OMP_NUM_THREADS=14
+NTHU_TRANSACTIONAL_REROUTE_BATCHES=1
+NTHU_TRANSACTIONAL_BATCH_LIMIT=14
+NTHU_TRANSACTIONAL_PROPOSAL_WAVE_BATCHES=16
+--p2-init-box-size=5 --p2-box-expand-size=5
+--p2-max-iteration=6 --overflow-threshold=1800
+--p3-max-iteration=24 --p3-init-box-size=80 --p3-box-expand-size=140
+```
+
+The run was stopped after the first verified failing row, because legal7 requires
+all seven original-legal cases to remain zero-overflow.
+
+| Benchmark | Seconds | WL | Total overflow | Max overflow | Overflowed nets | Overflowed edges |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| adaptec3.dragon70.3d.30.50.90 | 1242.257 | 13753300 | 3306276 | 2 | 344171 | 1653138 |
+
+Conclusion: transactional wave16 is **not legal7-safe**. The `newblue2` result is
+not sufficient evidence for the whole original-legal guard set. The failure mode
+is that no-fallback transactions leave too much residual overflow for P3/layer
+assignment on `adaptec3`; the final log showed `2D sum overflow = 26` and then
+`3D # of overflow = 3306276`.
+
 ## Current Status
 
 The current branch is no longer just a diagnostic fallback experiment. The latest
@@ -386,7 +420,8 @@ transactional path is:
 - wave-based OpenMP proposal scheduling, default wave size 16.
 
 On `newblue2` it is legal and improves same-runner time from `53.122s` to
-`47.173s` (`1.13x`) with WL about `1.014x` of the no-transaction row. The
+`47.173s` (`1.13x`) with WL about `1.014x` of the no-transaction row. It is not
+legal on the original-legal guard set because `adaptec3` overflows badly. The
 remaining limit is that only reroute proposal is parallelized; interval
 construction, candidate query/sort, final commit, post-processing bookkeeping,
 and 3D assignment still keep average CPU far below 14 full cores.

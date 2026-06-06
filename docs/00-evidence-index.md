@@ -92,6 +92,7 @@ raw run logs. They are still indexed here so `docs/` is the full navigation root
 | `../reports/06-bounded-length-reroute-probe.md` | Unsafe bounded rollback failure and safe bounded smoke result. | Bounded-length method diagnosis and rejection. |
 | `../reports/02-methods-by-commit-and-result.md` | Commit-to-method and method-family performance summary. | Tracking which commit/report produced each claim. |
 | `../reports/01-final-router-optimization-zh.md` | Final Chinese report with pitfalls, methods, results, future work, issues, and literature. | Main writeup. |
+| `../reports/07-scoring-methodology.md` | Defines legal scoring policy. | Use before quoting speedups: one config, fixed set, total-time primary score, geomean secondary. |
 
 ## Presentation Decks
 
@@ -115,23 +116,22 @@ outputs are large.
 | `/home/ubuntu/hpc-final-router/results/vm_literature_guided_wl_speed/20260605T040511Z_3ae6b79` | `../reports/05-wl-speed-literature-and-probes.md` | Layer-penalty probe. |
 | `/home/ubuntu/hpc-final-router/results/vm_bounded_length_reroute/20260605T044112Z_de271c9_full12` | `../reports/06-bounded-length-reroute-probe.md` | Unsafe bounded full12 and final recheck. |
 
-## Current Best Numbers
+## Current One-Config Numbers
 
-Use these only as the latest one-strategy final-family summary. For older
-portfolio/frontier claims, use the dated source reports above.
+Use these only as one-strategy final-family summaries. Older portfolio/frontier
+rows are raw diagnostic evidence, not final answers.
 
 | Scope | Original s | Current s | Speedup | WL ratio | Correctness |
 | --- | ---: | ---: | ---: | --- | --- |
 | requested12 latest recheck | 12295.597 | 9501.285 | 1.294x | avg 1.158, worst 1.284 | 10/12 legal, total overflow 166 |
-| requested12 earlier clean selected | 12295.597 | 9144.395 | 1.345x | avg 1.158, worst 1.284 | 10/12 legal, total overflow 166 |
 | original-legal 7 latest recheck | 6853.445 | 4061.935 | 1.687x | avg 1.118, worst 1.151 | 7/7 legal |
-| original-legal 7 earlier clean selected | 6853.445 | 3910.736 | 1.752x | avg 1.118, worst 1.151 | 7/7 legal |
 
 ## Rules for Future Edits
 
 1. Add raw run logs, result roots, and reproducibility notes under `docs/`.
 2. Add synthesized conclusions, score comparisons, and slides under `reports/`.
-3. Always include date, commit, benchmark set, denominator, and whether a strategy
-   is a portfolio, one-strategy router, or speed frontier.
+3. Always include date, commit, benchmark set, denominator, and routing config.
+   Final score rows must be one config over a fixed set. Portfolio/frontier rows
+   are diagnostics only.
 4. Do not mix early Slurm 16-case matrix numbers with later VM requested12 final
    numbers without stating that they are different experiment periods.

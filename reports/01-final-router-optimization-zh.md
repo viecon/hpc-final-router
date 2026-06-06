@@ -25,11 +25,17 @@ Apptainer `router.sif`、Lab2 verifier。測資主軸為 requested 12:
 | --- | ---: | ---: | ---: | --- | --- |
 | requested12 latest recheck | 12295.597 | 9501.285 | 1.294x | avg 1.158, worst 1.284 | 10/12 legal, total overflow 166 |
 | original-legal 7 latest recheck | 6853.445 | 4061.935 | 1.687x | avg 1.118, worst 1.151 | 7/7 legal |
-| earlier clean selected run | 12295.597 | 9144.395 | 1.345x | avg 1.158, worst 1.284 | 10/12 legal, total overflow 166 |
+| requested12 earlier same-config clean rerun | 12295.597 | 9144.395 | 1.345x | avg 1.158, worst 1.284 | 10/12 legal, total overflow 166 |
 
 這代表目前策略能保證 original 原本合法的 7 筆仍合法，並大幅降低 original
 overflow cases 的 overflow，但 `bigblue2` 與 `newblue1` 仍有小 residual
 overflow。
+
+本報告的正式分數只使用同一套 routing config 跑完整 benchmark set 的結果。
+主分數是 `sum(original_seconds) / sum(candidate_seconds)`，也就是整組測資跑完
+省下多少總時間；per-benchmark speedup 的 geometric mean 只能當輔助，不使用
+arithmetic mean。best-per-benchmark portfolio 或 frontier row 只保留作為診斷
+上限，不當作成果答案。詳細規則見 `07-scoring-methodology.md`。
 
 ## 1. 原本程式的效能 Pitfalls
 
@@ -101,8 +107,8 @@ utilization 幾乎為零。`adaptec3` 單 GPU costed path:
 | OpenMP analysis kernels | 平行化 congestion scan、overflow/WL reduction。 | `../docs/21-vm-multicore-utilization-log.md` | 12-case 約 1.03x | 約 1.000x | 正確但太小。 |
 | Conflict-aware multicore prototype | 嘗試把不衝突 two-pin reroute batch parallel。 | `db540bb`, `a5465c9`, `e648e19` | newblue2 default 65.739s, prototype best 80.255s | 類似 | CPU 提高但更慢。 |
 | Fast greedy layer assignment | 取代 expensive layer assignment。 | early docs | 12-case 1.59x | legal avg 1.743, worst 1.851 | 快但 WL 太高。 |
-| Net-guided low-layer assignment | 每個 net 有 preferred layer，優先低合法 layer。 | `7300fb7`, `53b1965` | legal7 WL<=1.2: 1.961x | avg 1.125, worst 1.163 | WL 控制有效。 |
-| P2/P3 budget tuning | 減少 routing effort。 | early docs | fastest guarded 12-case 3.17x | legal avg 1.767, worst 1.862 | 速度強但 WL 高。 |
+| Net-guided low-layer assignment | 每個 net 有 preferred layer，優先低合法 layer。 | `7300fb7`, `53b1965` | diagnostic legal7 WL<=1.2 portfolio: 1.961x | avg 1.125, worst 1.163 | WL 控制有效；portfolio 不是正式分數。 |
+| P2/P3 budget tuning | 減少 routing effort。 | early docs | diagnostic fastest-guarded 12-case portfolio: 3.17x | legal avg 1.767, worst 1.862 | 速度強但 WL 高；不是單一 config 成果。 |
 | Edge-count post-processing | overflow edge count 優先，限制 reroute。 | `NTHU_POST_SORT_MODE=edge_count` | 12-case 5.38x frontier | 約 1.8x+ | 多數 illegal，只能當 frontier。 |
 | CUDA scoring | GPU costed maze / dogleg candidate scoring。 | CUDA logs | standalone 33x-38x, integrated A3 2.780x | A3 約 1.706x | 子核心快，end-to-end 不穩。 |
 | Overall adaptive repair | 不依測資名，根據 overflow 決定是否 repair。 | `db48d4a` 到 `b982db4` | legal7 1.771x | avg 1.116, worst 1.151 | 正確但 speed 不夠。 |
@@ -214,14 +220,15 @@ const bool low_layer_first = std::getenv("NTHU_NET_GUIDED_LOW_LAYER_FIRST") != n
 
 | Scope | Speedup | Avg WL | Worst WL | Overflow |
 | --- | ---: | ---: | ---: | --- |
-| legal7 WL<=1.5 portfolio | 2.05x | 1.368 | 1.425 | 0/0 all |
-| legal7 WL<=1.2 portfolio | 1.961x | 1.125 | 1.163 | 0/0 all |
-| WL<=1.2 speed frontier | 3.585x | 1.138 | within 1.2 | total overflow 13642 |
+| diagnostic legal7 WL<=1.5 portfolio | 2.05x | 1.368 | 1.425 | 0/0 all |
+| diagnostic legal7 WL<=1.2 portfolio | 1.961x | 1.125 | 1.163 | 0/0 all |
+| illegal WL<=1.2 speed frontier | 3.585x | 1.138 | within 1.2 | total overflow 13642 |
 
 ### 判斷
 
-這證明 WL 問題主要來自 layer continuity 和低層偏好，而不只是 routing budget。
-但若要達到 2.8x 到 3.2x 且合法，仍需要更好的 overflow repair。
+這些 row-selection 結果只證明 WL 問題主要來自 layer continuity 和低層偏好，
+而不只是 routing budget；它們不是正式 score。若要達到 2.8x 到 3.2x 且合法，
+仍需要更好的 overflow repair。
 
 ## 2.5 P2/P3 Budget Tuning 與 Edge-Count Post
 
@@ -252,8 +259,8 @@ Edge-count post 則優先處理穿過最多 overflow edges 的 candidate:
 
 ### 結果
 
-- P2/P3 budget best legal adaptec1: `2.118x`。
-- fastest guarded requested12 portfolio: `3.17x`，但 original-legal avg/worst
+- P2/P3 budget diagnostic best legal adaptec1: `2.118x`。
+- diagnostic fastest-guarded requested12 portfolio: `3.17x`，但 original-legal avg/worst
   WL `1.767/1.862`。
 - edge-count post requested12: `5.38x`，但 legal coverage 只有 `2/12`。
 
@@ -448,9 +455,9 @@ OpenMP threads 有建立，但 routing mutation loop 是 sequential。CUDA kerne
 
 ### Q5: 報告中的 portfolio 和 final one-strategy 有什麼差別？
 
-早期 best-per-benchmark portfolio 用於診斷上限，例如 3.17x fastest guarded 或
-2.05x WL<=1.5 legal7。final one-strategy 不能依測資名切換，只能根據 routing state
-自適應。最終採用的是後者。
+早期 best-per-benchmark portfolio 只能用於診斷上限，例如 3.17x fastest guarded
+或 2.05x WL<=1.5 legal7。正式 score 不採用這些 row-selection 結果；final
+one-strategy 不能依測資名切換，只能根據 routing state 自適應。最終採用的是後者。
 
 ### Q6: Bounded-length guard 既然正確，為什麼不開？
 
@@ -459,8 +466,8 @@ OpenMP threads 有建立，但 routing mutation loop 是 sequential。CUDA kerne
 
 ### Q7: 實驗可重現性問題？
 
-VM load、evaluator 時間與 output 大小會造成秒數小幅變動。因此報告同時保留 clean
-selected run 與 latest recheck。所有正式數據都有 result root 記錄，且
+VM load、evaluator 時間與 output 大小會造成秒數小幅變動。因此報告同時保留
+same-config clean rerun 與 latest recheck。所有正式數據都有 result root 記錄，且
 `external/nthu-route-original` 保持 untouched。
 
 ## 5. 文獻探討

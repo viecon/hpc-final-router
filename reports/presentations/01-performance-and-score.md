@@ -51,8 +51,14 @@ newblue1, newblue2, newblue5, newblue6
 `bigblue1`, `newblue2`, `newblue6`。這些 case 是 correctness guard：加速後
 不能把它們弄壞。
 
+正式 score 的算法：
+
+- 同一套 routing config 跑完整 benchmark set，不能每個測資挑不同版本。
+- 主分數是 `sum(original_seconds) / sum(candidate_seconds)`。
+- per-case speedup 的 geometric mean 可以當輔助；不使用 arithmetic mean。
+
 資料來源：`../03-final-vm-strategy-results.md`,
-`../../docs/00-evidence-index.md`
+`../../docs/00-evidence-index.md`, `../07-scoring-methodology.md`
 
 ## 投影片 4 - 從 main branch docs 找到的起點
 
@@ -129,16 +135,14 @@ thread sweep 反推，current `OpenMP` path 的 effective `P` 也只有約
 | 範圍 | Original s | Current s | Speedup | WL ratio | Legality |
 | --- | ---: | ---: | ---: | --- | --- |
 | requested12 latest recheck | 12295.597 | 9501.285 | 1.294x | avg 1.158, worst 1.284 | 10/12 legal, overflow 166 |
-| requested12 clean selected run | 12295.597 | 9144.395 | 1.345x | avg 1.158, worst 1.284 | 10/12 legal, overflow 166 |
 | 原本合法 7 筆 latest recheck | 6853.445 | 4061.935 | 1.687x | avg 1.118, worst 1.151 | 7/7 legal |
-| 原本合法 7 筆 clean run | 6853.445 | 3910.736 | 1.752x | avg 1.118, worst 1.151 | 7/7 legal |
 
 重點：原本不 overflow 的 7 筆全部保持合法；整體 12 筆從 7/12 legal 改善到
 10/12 legal，剩下 residual overflow 在 `bigblue2` 和 `newblue1`。
 
 ## 投影片 8 - 每個測資差在哪裡
 
-Clean selected run 的逐測資結果：
+同一套 final routing config 的逐測資結果：
 
 | Benchmark | 原始是否合法 | Original s | Current s | Speedup | Current overflow |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -192,18 +196,19 @@ Clean selected run 的逐測資結果：
 結論：目前最有效的不是硬把 loop 平行化，而是減少不必要 repair、把 repair effort
 花在真正 overflow 的地方。
 
-## 投影片 11 - 快速但不能當 final 的結果
+## 投影片 11 - 快速但不能當 score 的結果
 
-前面實驗有些數字很快，但不能混成最後成果：
+前面實驗有些數字很快，但它們不是同一個 routing config 跑完整 set，所以不能
+當正式 score。報告中只把它們當 diagnostic evidence：
 
-| 結果類型 | 例子 | 為什麼不能直接當 final |
+| 結果類型 | 用途 | 為什麼不能直接當 score |
 | --- | --- | --- |
-| quality-sensitive portfolio | WL<=1.2 legal7 portfolio: 1.961x | 這是多個版本中挑每個 case 的好結果，不是一套固定 router。 |
-| runtime frontier | requested12 edge-count: 5.38x | 很快，但 legal coverage 只有約 2/12。 |
-| fastest guarded portfolio | requested12 3.17x | 原本合法 case 有守住，但 WL 偏大，hard cases 仍有 overflow。 |
+| diagnostic portfolio | 看哪些方法有潛力。 | 多個版本中挑每個 case 的好結果，不是一套固定 router。 |
+| runtime frontier | 看速度上限。 | 很快，但通常不合法或 `WL` 太高。 |
+| guarded frontier | 看 legality guard 能不能守住。 | 仍可能不是單一 config，hard cases 也可能 residual overflow。 |
 
-這些結果的價值是告訴我們「速度上限在哪裡」和「哪個方向有潛力」，但最後報告要用
-同一套全域策略的結果。
+這些結果的價值是告訴我們「速度上限在哪裡」和「哪個方向有潛力」。正式分數只用
+同一套全域策略的 total-time speedup，geometric mean 只當輔助。
 
 ## 投影片 12 - 最後可以怎麼講
 

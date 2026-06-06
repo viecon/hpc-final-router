@@ -154,8 +154,8 @@ if (std::getenv("NTHU_FAST_GREEDY_LAYER") != nullptr) {
 
 - plain fast layer：requested12 約 `1.59x`，但 original-legal `WL` avg/worst
   `1.743/1.851`，品質太差；
-- net-guided low-layer `WL<=1.2` legal7 portfolio：`1.961x`，avg/worst `WL`
-  `1.125/1.163`。
+- net-guided low-layer `WL<=1.2` legal7 diagnostic portfolio：`1.961x`，
+  avg/worst `WL` `1.125/1.163`，只用來看方法上限，不當正式 score。
 
 ## 投影片 8 - Net-guided low-layer assignment
 
@@ -203,8 +203,8 @@ NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
 
 效果：
 
-- legal7 clean run：`1.752x`，`WL` avg/worst `1.118/1.151`，`7/7` legal；
-- requested12 clean run：`1.345x`，`WL` avg/worst `1.158/1.284`，
+- legal7 same-config clean run：`1.752x`，`WL` avg/worst `1.118/1.151`，`7/7` legal；
+- requested12 same-config clean run：`1.345x`，`WL` avg/worst `1.158/1.284`，
   `10/12` legal，total `overflow=166`。
 
 ## 投影片 10 - Edge-count post-processing
