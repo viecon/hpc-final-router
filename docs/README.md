@@ -1,20 +1,37 @@
 # Documentation Index
 
-Last updated: 2026-05-27
+Last updated: 2026-06-06
 
-This directory now has two kinds of notes:
+This directory is now treated primarily as the raw-data and experiment-history
+side of the project.  Synthesized conclusions, method comparisons, and
+presentation-ready summaries live under `reports/`.
 
-- Final-facing report material: use these for the term-project writeup and slides.
-- Working notes: keep these for reproducibility, reruns, and future experiments.
+Start from `raw_data_index.md`; it maps each report to the dated experiment
+period that produced it and prevents mixing rows from different implementation
+stages.
 
 ## Read First
 
 | File | Purpose |
 | --- | --- |
+| `raw_data_index.md` | Canonical map of raw evidence, report sources, result roots, chronology guards, and final presentation decks. |
 | `final_experiment_report.md` | Complete report draft: experiment method, original NTHU flow, strategy-by-strategy changes, code snippets, and comparison tables. |
 | `methods_and_results_summary.md` | Shorter result summary for slides or oral presentation. |
 | `session_handoff.md` | Current project state after result cleanup; use this when resuming work. |
 | `rerun_priority.md` | What to rerun if raw logs/results are required again. Current status: no rerun needed before preserving docs/source. |
+
+## Synthesized Reports And Presentation Decks
+
+The files below are outside `docs/` because they are interpreted summaries rather
+than raw evidence. They are indexed here for navigation.
+
+| File | Purpose |
+| --- | --- |
+| `../reports/final_router_optimization_report_zh.md` | Main Chinese report: pitfalls, optimization methods, WL/speed impact, future work, issues, literature. |
+| `../reports/optimization_methods_commit_summary.md` | Method-family and commit-to-result summary. |
+| `../reports/presentations/performance_brief.md` | Slide-style brief grouped by performance and WL/correctness trade-off. |
+| `../reports/presentations/optimization_methods_brief.md` | Slide-style brief grouped by optimization method and code-level intervention. |
+| `../reports/presentations/timeline_correctness_brief.md` | Slide-style brief grouped by chronology, final/rejected states, and correctness guard. |
 
 ## Experiment Notes
 
