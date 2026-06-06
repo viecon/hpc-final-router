@@ -230,6 +230,11 @@ bool two_stage_serial_fallback_enabled() {
     return value == nullptr || *value == '\0' || std::atoi(value) != 0;
 }
 
+bool two_stage_defer_fallback_enabled() {
+    const char* value = std::getenv("NTHU_TWO_STAGE_DEFER_FALLBACK");
+    return value == nullptr || *value == '\0' || std::atoi(value) != 0;
+}
+
 bool two_stage_l_shape_enabled() {
     const char* value = std::getenv("NTHU_TWO_STAGE_LSHAPE");
     if (value != nullptr && *value != '\0') {
@@ -1482,6 +1487,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         const bool try_l_shape = two_stage_l_shape_enabled();
         const bool try_dogleg = two_stage_dogleg_enabled();
         const bool serial_fallback_enabled = two_stage_serial_fallback_enabled();
+        const bool defer_fallback = serial_fallback_enabled && two_stage_defer_fallback_enabled();
 
         auto accept_trial = [&](const Two_pin_element_2d& source,
                 const std::vector<Coordinate_2d>& candidate_path,
@@ -1515,10 +1521,19 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         int invalid = 0;
         int commit_skipped = 0;
         int serial_fallback = 0;
+        int fallback_queued = 0;
+        int fallback_skipped = 0;
         int parallel_candidates = 0;
         int chunks = 0;
         int max_chunk_size = 0;
         int max_workers_used = 1;
+        double proposal_ms = 0.0;
+        double commit_ms = 0.0;
+        double fallback_ms = 0.0;
+        std::vector<Two_pin_element_2d*> deferred_fallback_twopins;
+        if (defer_fallback) {
+            deferred_fallback_twopins.reserve(overflow_twopins.size());
+        }
 
         for (int chunk_begin = 0; chunk_begin < overflow_count; chunk_begin += chunk_limit) {
             const int chunk_count = std::min(chunk_limit, overflow_count - chunk_begin);
@@ -1556,6 +1571,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 }
             };
 
+            const auto proposal_start = ProfileClock::now();
 #ifdef NTHU_ROUTE_OPENMP
             const int workers = std::max(1, std::min(batch_limit, chunk_count));
             max_workers_used = std::max(max_workers_used, workers);
@@ -1573,6 +1589,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 make_proposal(i, local_monotonic);
             }
 #endif
+            proposal_ms += profile_ms(proposal_start, ProfileClock::now());
 
             for (const TwoStageProposal& proposal : proposals) {
                 if (proposal.valid) {
@@ -1580,6 +1597,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 }
             }
 
+            const auto commit_start = ProfileClock::now();
             for (int i = 0; i < chunk_count; ++i) {
                 Two_pin_element_2d* two_pin = overflow_twopins[chunk_begin + i];
                 const TwoStageProposal& proposal = proposals[i];
@@ -1612,10 +1630,31 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 }
                 if (serial_fallback_enabled &&
                         !congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false)) {
-                    range_router(*two_pin, version);
-                    ++serial_fallback;
+                    if (defer_fallback) {
+                        deferred_fallback_twopins.push_back(two_pin);
+                        ++fallback_queued;
+                    } else {
+                        const auto fallback_start = ProfileClock::now();
+                        range_router(*two_pin, version);
+                        fallback_ms += profile_ms(fallback_start, ProfileClock::now());
+                        ++serial_fallback;
+                    }
                 }
             }
+            commit_ms += profile_ms(commit_start, ProfileClock::now());
+        }
+
+        if (defer_fallback) {
+            const auto fallback_start = ProfileClock::now();
+            for (Two_pin_element_2d* two_pin : deferred_fallback_twopins) {
+                if (!congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false)) {
+                    range_router(*two_pin, version);
+                    ++serial_fallback;
+                } else {
+                    ++fallback_skipped;
+                }
+            }
+            fallback_ms += profile_ms(fallback_start, ProfileClock::now());
         }
 
         if (do_profile) {
@@ -1625,11 +1664,12 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             range_profile.parallel_max_batch = std::max(range_profile.parallel_max_batch, max_chunk_size);
         }
         if (do_profile || parallel_reroute_log_enabled()) {
-            log_sp->info("two-stage parallel reroute candidates={} overflow_candidates={} parallel_candidates={} chunks={} proposed={} committed={} invalid={} commit_skipped={} serial_fallback={} max_chunk={} max_workers={} batch_limit={} l_shape={} dogleg={} fallback={}",
+            log_sp->info("two-stage parallel reroute candidates={} overflow_candidates={} parallel_candidates={} chunks={} proposed={} committed={} invalid={} commit_skipped={} fallback_queued={} fallback_skipped={} serial_fallback={} max_chunk={} max_workers={} batch_limit={} l_shape={} dogleg={} fallback={} defer_fallback={} proposal_ms={:.3f} commit_ms={:.3f} fallback_ms={:.3f}",
                     twopin_list.size(), overflow_twopins.size(), parallel_candidates, chunks,
-                    proposed, committed, invalid, commit_skipped, serial_fallback,
+                    proposed, committed, invalid, commit_skipped, fallback_queued, fallback_skipped, serial_fallback,
                     max_chunk_size, max_workers_used, batch_limit, try_l_shape ? 1 : 0, try_dogleg ? 1 : 0,
-                    serial_fallback_enabled ? 1 : 0);
+                    serial_fallback_enabled ? 1 : 0, defer_fallback ? 1 : 0,
+                    proposal_ms, commit_ms, fallback_ms);
         }
         return;
     }

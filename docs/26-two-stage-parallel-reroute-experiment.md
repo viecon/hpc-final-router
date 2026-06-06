@@ -35,7 +35,14 @@ The experiment splits overflow reroute into chunked two-stage rounds:
 All overflow candidates are processed through proposal chunks. The chunk cap only
 limits proposal working-set size; it no longer sends the remaining tail directly
 to serial routing. Serial `range_router()` is reserved for proposal failures or
-commit-time conflicts.
+commit-time conflicts, and by default those failures are queued until all proposal
+chunks have completed. This prevents serial fallback from being interleaved with
+the parallel proposal phase.
+
+The log line reports separate `proposal_ms`, `commit_ms`, and `fallback_ms`
+fields. These are the numbers to use for Amdahl-style analysis; total CPU
+utilization alone is misleading because correctness verification and serial
+fallback are single-core.
 
 Maze reroute remains serial fallback. This is intentional: the maze path can
 adjust multi-terminal tree state, so it is not safe to run in the proposal phase
@@ -49,6 +56,7 @@ without a larger tree-transaction design.
 | `NTHU_TWO_STAGE_BATCH_LIMIT` | `NTHU_PARALLEL_REROUTE_BATCH_LIMIT`, or OpenMP max threads | Cap proposal worker count. |
 | `NTHU_TWO_STAGE_MAX_CANDIDATES` | `NTHU_PARALLEL_REROUTE_MAX_CANDIDATES`, default 4096 | Proposal chunk size. All overflow candidates are still processed chunk-by-chunk. |
 | `NTHU_TWO_STAGE_SERIAL_FALLBACK` | on | Route unresolved proposal failures through normal serial `range_router()`. |
+| `NTHU_TWO_STAGE_DEFER_FALLBACK` | on | Queue unresolved fallback candidates until all proposal chunks finish. |
 | `NTHU_TWO_STAGE_LSHAPE` | on | Enable/disable L-shape proposal candidates. |
 | `NTHU_TWO_STAGE_DOGLEG` | on | Enable/disable dogleg proposal candidates. |
 
@@ -86,8 +94,12 @@ Acceptance criteria for continuing this direction:
 | `two_stage_openmp14` | 47.133 | 8757736 | 0 | L-shape/dogleg proposal off; almost all fallback. |
 | `two_stage_ld_openmp14` | 46.190 | 8753892 | 0 | L-shape/dogleg on; proposal useful but first implementation still sent tail to serial fallback. |
 
-This motivated the second implementation change: chunk all overflow candidates
-through the parallel proposal stage instead of only the first chunk.
+This motivated two follow-up implementation changes:
+
+- chunk all overflow candidates through the parallel proposal stage instead of
+  only the first chunk;
+- defer serial fallback until after all proposal chunks, with timing logs for
+  proposal/commit/fallback.
 
 ## Status
 
