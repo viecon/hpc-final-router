@@ -14,7 +14,7 @@ SKIP_BUILD=${SKIP_BUILD:-1}
 JOBS=${JOBS:-14}
 PARALLEL_BENCH_JOBS=${PARALLEL_BENCH_JOBS:-1}
 ROUTER_THREADS=${ROUTER_THREADS:-1}
-RUN_STRATEGIES=${RUN_STRATEGIES:-prev_final aggressive_p3lite_v1 aggressive_p3lite_v2_postonly}
+RUN_STRATEGIES=${RUN_STRATEGIES:-prev_final aggressive_p3lite_v1 aggressive_p3lite_v2_postonly frontier_edgecount_shortp3_v1}
 
 COMMON_ARGS=${COMMON_ARGS:-"--p2-init-box-size=5 --p2-box-expand-size=5 --p2-max-iteration=6 --overflow-threshold=1800 --p3-max-iteration=24 --p3-init-box-size=80 --p3-box-expand-size=140"}
 
@@ -31,6 +31,7 @@ strategy,previous_strategy,optimization_logic,reference
 prev_final,,final high-overflow adaptive P2 budget from reports/03-final-vm-strategy-results.md,internal prior result
 aggressive_p3lite_v1,prev_final,aggressively reduce initial/repair P3 effort while keeping routing-state adaptive repair; tests whether early deep P3 was the bottleneck,internal follow-up; no new paper claim
 aggressive_p3lite_v2_postonly,aggressive_p3lite_v1,same P3-lite logic but route tiny residual overflow through post-only repair before P2 repair; fixes v1 support issue where 3-4 overflow entered P2,internal follow-up; no new paper claim
+frontier_edgecount_shortp3_v1,prev_final,aggressive runtime frontier using dogleg fast path range-skip edge-count post ordering and short P3 budget; expected to expose speed/legality tradeoff,internal frontier follow-up; no new paper claim
 CSV
 
 {
@@ -75,7 +76,8 @@ run_one() {
   local role=$2
   local bench=$3
   local timeout_seconds=$4
-  shift 4
+  local strategy_args=$5
+  shift 5
   local result_dir="$RESULT_ROOT/$strategy/$bench"
   local bench_list="$result_dir/bench.list"
   mkdir -p "$result_dir"
@@ -85,6 +87,7 @@ run_one() {
     echo "role=$role"
     echo "benchmark=$bench"
     echo "timeout_seconds=$timeout_seconds"
+    echo "strategy_args=$strategy_args"
     echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "env=$*"
   } > "$result_dir/run_meta.txt"
@@ -104,7 +107,7 @@ run_one() {
       JOBS="$JOBS" \
       PARALLEL_BENCH_JOBS="$PARALLEL_BENCH_JOBS" \
       OMP_NUM_THREADS="$ROUTER_THREADS" \
-      NTHU_EXTRA_ARGS="$COMMON_ARGS" \
+      NTHU_EXTRA_ARGS="$strategy_args" \
       bash scripts/run_nthu_ispd08.sh \
       > "$result_dir/runner.log" 2>&1
   local rc=$?
@@ -137,8 +140,8 @@ if strategy_enabled prev_final; then
     NTHU_ADAPTIVE_REPAIR_P3_BOX_INC=140
     NTHU_POST_SORT_MODE=edge_count
   )
-  run_one prev_final easy newblue2.fastplace90.3d.50.20.100 230 "${common_prev[@]}"
-  run_one prev_final hard adaptec4.aplace60.3d.30.50.90 392 "${common_prev[@]}"
+  run_one prev_final easy newblue2.fastplace90.3d.50.20.100 230 "$COMMON_ARGS" "${common_prev[@]}"
+  run_one prev_final hard adaptec4.aplace60.3d.30.50.90 392 "$COMMON_ARGS" "${common_prev[@]}"
 fi
 
 if strategy_enabled aggressive_p3lite_v1; then
@@ -161,8 +164,8 @@ if strategy_enabled aggressive_p3lite_v1; then
     NTHU_POST_SORT_MODE=edge_count
     NTHU_POST_OVERFLOW_LIMIT_AFTER_FIRST=80
   )
-  run_one aggressive_p3lite_v1 easy newblue2.fastplace90.3d.50.20.100 230 "${common_candidate[@]}"
-  run_one aggressive_p3lite_v1 hard adaptec4.aplace60.3d.30.50.90 392 "${common_candidate[@]}"
+  run_one aggressive_p3lite_v1 easy newblue2.fastplace90.3d.50.20.100 230 "$COMMON_ARGS" "${common_candidate[@]}"
+  run_one aggressive_p3lite_v1 hard adaptec4.aplace60.3d.30.50.90 392 "$COMMON_ARGS" "${common_candidate[@]}"
 fi
 
 if strategy_enabled aggressive_p3lite_v2_postonly; then
@@ -186,8 +189,28 @@ if strategy_enabled aggressive_p3lite_v2_postonly; then
     NTHU_POST_SORT_MODE=edge_count
     NTHU_POST_OVERFLOW_LIMIT_AFTER_FIRST=80
   )
-  run_one aggressive_p3lite_v2_postonly easy newblue2.fastplace90.3d.50.20.100 230 "${common_candidate[@]}"
-  run_one aggressive_p3lite_v2_postonly hard adaptec4.aplace60.3d.30.50.90 392 "${common_candidate[@]}"
+  run_one aggressive_p3lite_v2_postonly easy newblue2.fastplace90.3d.50.20.100 230 "$COMMON_ARGS" "${common_candidate[@]}"
+  run_one aggressive_p3lite_v2_postonly hard adaptec4.aplace60.3d.30.50.90 392 "$COMMON_ARGS" "${common_candidate[@]}"
+fi
+
+if strategy_enabled frontier_edgecount_shortp3_v1; then
+  frontier_args="--p2-init-box-size=5 --p2-box-expand-size=5 --overflow-threshold=10000 --p2-max-iteration=5 --p3-max-iteration=2 --p3-init-box-size=54 --p3-box-expand-size=88"
+  common_candidate=(
+    NTHU_FAST_GREEDY_LAYER=1
+    NTHU_DOGLEG_FASTPATH=1
+    NTHU_DOGLEG_MAX_EXTRA=0
+    NTHU_DOGLEG_MIN_SCORE=1
+    NTHU_DOGLEG_STEP=8
+    NTHU_RANGE_SKIP_REMAINDER=1
+    NTHU_REROUTE_SCORE_P2_ONLY=1
+    NTHU_REROUTE_MIN_OVERFLOW_SCORE=5
+    NTHU_REROUTE_LATE_SCORE_AFTER_ITER=4
+    NTHU_REROUTE_LATE_MIN_OVERFLOW_SCORE=4
+    NTHU_POST_SORT_MODE=edge_count
+    NTHU_POST_OVERFLOW_LIMIT_AFTER_FIRST=80
+  )
+  run_one frontier_edgecount_shortp3_v1 easy newblue2.fastplace90.3d.50.20.100 230 "$frontier_args" "${common_candidate[@]}"
+  run_one frontier_edgecount_shortp3_v1 hard adaptec4.aplace60.3d.30.50.90 392 "$frontier_args" "${common_candidate[@]}"
 fi
 
 python3 - "$RESULT_ROOT" <<'PY'

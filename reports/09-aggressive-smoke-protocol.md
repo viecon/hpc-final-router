@@ -142,3 +142,50 @@ Follow-up:
 
 - Test `aggressive_p3lite_v2_postonly`: for tiny residual overflow, run
   post-only repair before P2 repair.
+
+## Follow-Up Candidate: `aggressive_p3lite_v2_postonly`
+
+Result root:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/aggr_p3lite_v2_d8af035_20260606T204103Z
+```
+
+| Strategy | Role | Benchmark | Seconds | Speedup vs original | WL ratio | Overflow |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `aggressive_p3lite_v2_postonly` | easy | `newblue2` | 46.542 | 1.644x | 1.151 | 0 / 0 |
+| `aggressive_p3lite_v2_postonly` | hard | `adaptec4` | 106.239 | 1.230x | 1.109 | 0 / 0 |
+
+Against `prev_final` in the same smoke:
+
+- `newblue2`: 46.542s vs 46.957s, about 0.9% faster.
+- `adaptec4`: 106.239s vs 104.147s, about 2.0% slower.
+
+Classification:
+
+- The v1 support issue was real and v2 fixed it: small residual overflow now
+  goes through post-only repair and skips P2 repair.
+- The net result is still not a meaningful improvement over `prev_final`.
+- This family should not be promoted unless a broader set shows consistent
+  speed without legality loss.
+
+## Next Candidate: `frontier_edgecount_shortp3_v1`
+
+This is a deliberately aggressive runtime-frontier smoke.
+
+Logic:
+
+- use fast greedy layer assignment;
+- enable dogleg fast path and range skip;
+- use edge-count post ordering;
+- reduce P3 to only 2 rounds with a smaller box;
+- stop post-processing after a limited overflow candidate set.
+
+Hypothesis:
+
+This should show whether the old edge-count runtime frontier still gives strong
+speed on the smoke pair.  If it is illegal, the result is a frontier row only,
+not a final-router candidate.
+
+No new paper claim is attached to this candidate. It is an internal frontier
+probe based on earlier VM strategy-matrix evidence.
