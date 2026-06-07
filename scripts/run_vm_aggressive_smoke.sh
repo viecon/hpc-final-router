@@ -450,6 +450,9 @@ if strategy_enabled frontier_proposal_reroute_v7; then
     NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA=8
     NTHU_PROPOSAL_REROUTE_IMPROVEMENT_COMMIT=1
     NTHU_PROPOSAL_REROUTE_RIPUP_BEFORE_PROPOSE=1
+    NTHU_PROPOSAL_REROUTE_ADAPTIVE_ROUNDS=1
+    NTHU_PROPOSAL_REROUTE_LOW_OVERFLOW_LIMIT=1000
+    NTHU_PROPOSAL_REROUTE_LOW_MAX_ROUNDS=2
   )
   run_one frontier_proposal_reroute_v7 easy newblue2.fastplace90.3d.50.20.100 230 "$frontier_args" "${common_candidate[@]}"
   run_one frontier_proposal_reroute_v7 hard adaptec4.aplace60.3d.30.50.90 392 "$frontier_args" "${common_candidate[@]}"
