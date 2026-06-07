@@ -1428,6 +1428,41 @@ Risk:
   congestion map.  It is only enabled when the measured total overflow is within
   the low-tail limit, so the main routing work remains parallel.
 
+### v8.7 Self-Ripup Result
+
+Commit:
+
+```text
+de25537 Add v8 low-tail self-ripup repair
+```
+
+Run roots:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_de25537_smoke_014_easy_selfripup_14t
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_de25537_smoke_015_hard_selfripup_14t
+```
+
+Result:
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.7 | v8.6 + low-tail self-ripup box 122 | `newblue2` | 69.025091 | 76.516170 | 1.109x | 1.158 | 0 / 0 | legal |
+| v8.7 | same | `adaptec4` | 112.467956 | 130.666544 | 1.162x | 1.111 | 0 / 0 | legal, promote to guard |
+
+Key logs:
+
+- easy: `self-ripup inputs=14 proposed=6 committed=2`, final internal
+  overflow `0/0`;
+- hard: `self-ripup inputs=33 proposed=9 committed=4`, internal overflow
+  reduced from 13 to 4 in 2D, and final Lab2 evaluator reports `0/0`.
+
+Decision:
+
+- v8.7 is the first v8 direct-proposal variant that passes both easy and hard
+  smoke while remaining faster than original on both rows.
+- Expand to the `legal7` guard before any requested-set benchmark.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:
