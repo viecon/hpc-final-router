@@ -223,6 +223,10 @@ bool proposal_reroute_improvement_commit_enabled() {
     return std::getenv("NTHU_PROPOSAL_REROUTE_IMPROVEMENT_COMMIT") != nullptr;
 }
 
+bool proposal_reroute_ripup_before_propose_enabled() {
+    return std::getenv("NTHU_PROPOSAL_REROUTE_RIPUP_BEFORE_PROPOSE") != nullptr;
+}
+
 int proposal_reroute_overflow_edge_quota() {
     const char* value = std::getenv("NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA");
     if (value == nullptr || *value == '\0') {
@@ -1514,16 +1518,20 @@ bool NTHUR::RangeRouter::try_dogleg_fastpath(Two_pin_element_2d& two_pin) {
 
 bool NTHUR::RangeRouter::propose_reroute_path(const Two_pin_element_2d& two_pin, int version,
         MonotonicRouting& local_monotonic, Multisource_multisink_mazeroute* local_maze,
-        bool allow_maze, std::vector<Coordinate_2d>& proposed_path) {
+        bool allow_maze, std::vector<Coordinate_2d>& proposed_path,
+        bool old_path_removed, int known_old_path_overflow_score) {
     proposed_path.clear();
-    if (congestion.check_path_no_overflow(two_pin.path, two_pin.net_id, false)) {
+    if (!old_path_removed && congestion.check_path_no_overflow(two_pin.path, two_pin.net_id, false)) {
         return false;
     }
 
-    int old_path_overflow_score = 0;
-    for (int i = static_cast<int>(two_pin.path.size()) - 2; i >= 0; --i) {
-        const Edge_2d& edge = congestion.congestionMap2d.edge(two_pin.path[i], two_pin.path[i + 1]);
-        old_path_overflow_score += std::max(0, edge.overUsage());
+    int old_path_overflow_score = known_old_path_overflow_score;
+    if (old_path_overflow_score < 0) {
+        old_path_overflow_score = 0;
+        for (int i = static_cast<int>(two_pin.path.size()) - 2; i >= 0; --i) {
+            const Edge_2d& edge = congestion.congestionMap2d.edge(two_pin.path[i], two_pin.path[i + 1]);
+            old_path_overflow_score += std::max(0, edge.overUsage());
+        }
     }
 
     int min_reroute_score = reroute_min_overflow_score();
@@ -1625,19 +1633,25 @@ bool NTHUR::RangeRouter::propose_reroute_path(const Two_pin_element_2d& two_pin,
 }
 
 bool NTHUR::RangeRouter::commit_reroute_proposal(Two_pin_element_2d& two_pin,
-        const std::vector<Coordinate_2d>& proposed_path, int version) {
+        const std::vector<Coordinate_2d>& proposed_path, int version,
+        bool old_path_removed, int known_old_path_overflow_score) {
     if (proposed_path.size() < 2 ||
-            congestion.check_path_no_overflow(two_pin.path, two_pin.net_id, false)) {
+            (!old_path_removed && congestion.check_path_no_overflow(two_pin.path, two_pin.net_id, false))) {
         return false;
     }
 
     const bool improvement_commit = proposal_reroute_improvement_commit_enabled();
-    const int old_path_overflow_score = improvement_commit ? path_overflow_score(two_pin, congestion) : 0;
+    int old_path_overflow_score = improvement_commit ? known_old_path_overflow_score : 0;
+    if (improvement_commit && old_path_overflow_score < 0) {
+        old_path_overflow_score = path_overflow_score(two_pin, congestion);
+    }
     const std::vector<Coordinate_2d> original_path(two_pin.path);
     const Coordinate_2d original_pin1 = two_pin.pin1;
     const Coordinate_2d original_pin2 = two_pin.pin2;
 
-    congestion.update_congestion_map_remove_two_pin_net(original_path, two_pin.net_id);
+    if (!old_path_removed) {
+        congestion.update_congestion_map_remove_two_pin_net(original_path, two_pin.net_id);
+    }
     bool accept = false;
     if (improvement_commit) {
         const int new_path_overflow_score =
@@ -1673,6 +1687,13 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             Two_pin_element_2d* two_pin;
             int overflow_score;
         };
+        struct RippedPathState {
+            std::vector<Coordinate_2d> original_path;
+            Coordinate_2d original_pin1;
+            Coordinate_2d original_pin2;
+            int old_overflow_score = -1;
+            bool removed = false;
+        };
         int min_reroute_score = reroute_min_overflow_score();
         const int score_until_iter = reroute_score_until_iter();
         const int late_score_after_iter = reroute_late_score_after_iter();
@@ -1693,6 +1714,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         const bool overflow_edge_conflict = conflict_aware && proposal_reroute_overflow_edge_conflict_enabled();
         const int overflow_edge_quota = proposal_reroute_overflow_edge_quota();
         const bool improvement_commit = proposal_reroute_improvement_commit_enabled();
+        const bool ripup_before_propose = proposal_reroute_ripup_before_propose_enabled();
 
         int total_inputs = 0;
         int total_selected = 0;
@@ -1800,6 +1822,24 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 break;
             }
 
+            std::vector<RippedPathState> ripped_paths(overflow_twopins.size());
+            if (ripup_before_propose) {
+                for (int i = 0; i < static_cast<int>(overflow_twopins.size()); ++i) {
+                    Two_pin_element_2d& two_pin = *overflow_twopins[i];
+                    RippedPathState& state = ripped_paths[i];
+                    state.original_path = two_pin.path;
+                    state.original_pin1 = two_pin.pin1;
+                    state.original_pin2 = two_pin.pin2;
+                    state.old_overflow_score = path_overflow_score(two_pin, congestion);
+                }
+                for (int i = 0; i < static_cast<int>(overflow_twopins.size()); ++i) {
+                    Two_pin_element_2d& two_pin = *overflow_twopins[i];
+                    RippedPathState& state = ripped_paths[i];
+                    congestion.update_congestion_map_remove_two_pin_net(state.original_path, two_pin.net_id);
+                    state.removed = true;
+                }
+            }
+
             std::vector<RerouteProposal> proposals(overflow_twopins.size());
             const auto proposal_start = ProfileClock::now();
 #ifdef NTHU_ROUTE_OPENMP
@@ -1813,7 +1853,8 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                     proposals[i].two_pin = overflow_twopins[i];
                     proposals[i].proposed = propose_reroute_path(*overflow_twopins[i], version,
                             local_monotonic, allow_maze ? &local_maze : nullptr, allow_maze,
-                            proposals[i].path);
+                            proposals[i].path, ripup_before_propose,
+                            ripup_before_propose ? ripped_paths[i].old_overflow_score : -1);
                 }
             }
 #else
@@ -1824,7 +1865,8 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 proposals[i].two_pin = overflow_twopins[i];
                 proposals[i].proposed = propose_reroute_path(*overflow_twopins[i], version,
                         local_monotonic, allow_maze ? &local_maze : nullptr, allow_maze,
-                        proposals[i].path);
+                        proposals[i].path, ripup_before_propose,
+                        ripup_before_propose ? ripped_paths[i].old_overflow_score : -1);
             }
 #endif
 
@@ -1833,12 +1875,18 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             int proposal_success = 0;
             int proposal_commits = 0;
             int proposal_rejects = 0;
-            for (RerouteProposal& proposal : proposals) {
+            for (int proposal_index = 0; proposal_index < static_cast<int>(proposals.size()); ++proposal_index) {
+                RerouteProposal& proposal = proposals[proposal_index];
                 if (!proposal.proposed) {
+                    if (ripup_before_propose && ripped_paths[proposal_index].removed) {
+                        congestion.update_congestion_map_insert_two_pin_net(*proposal.two_pin);
+                    }
                     continue;
                 }
                 ++proposal_success;
-                if (commit_reroute_proposal(*proposal.two_pin, proposal.path, version)) {
+                if (commit_reroute_proposal(*proposal.two_pin, proposal.path, version,
+                            ripup_before_propose,
+                            ripup_before_propose ? ripped_paths[proposal_index].old_overflow_score : -1)) {
                     proposal.committed = true;
                     ++proposal_commits;
                 } else {
@@ -1858,13 +1906,13 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             total_commit_ms += commit_ms_value;
 
             if (do_log) {
-                log_sp->info("proposal reroute round={} hot_pool={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} edge_conflict={} edge_quota={} improvement_commit={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
+                log_sp->info("proposal reroute round={} hot_pool={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} edge_conflict={} edge_quota={} improvement_commit={} ripup_snapshot={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
                         proposal_round, proposal_inputs.size(), overflow_twopins.size(), conflict_skipped,
                         proposal_success, proposal_commits, proposal_rejects,
                         static_cast<int>(overflow_twopins.size()) - proposal_success,
                         conflict_aware ? 1 : 0, overflow_edge_conflict ? 1 : 0,
                         overflow_edge_conflict ? overflow_edge_quota : 0,
-                        improvement_commit ? 1 : 0, allow_maze ? 1 : 0,
+                        improvement_commit ? 1 : 0, ripup_before_propose ? 1 : 0, allow_maze ? 1 : 0,
                         proposal_ms_value, commit_ms_value);
             }
             if (proposal_commits == 0) {
@@ -1882,12 +1930,13 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             range_profile.proposal_skipped += total_selected - total_proposal_success;
         }
         if (do_log) {
-            log_sp->info("proposal reroute phase rounds={} hot_pool_scanned={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} edge_conflict={} edge_quota={} improvement_commit={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("proposal reroute phase rounds={} hot_pool_scanned={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} edge_conflict={} edge_quota={} improvement_commit={} ripup_snapshot={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
                     max_rounds, total_inputs, total_selected, total_conflict_skipped,
                     total_proposal_success, total_proposal_commits, total_proposal_rejects,
                     total_selected - total_proposal_success, conflict_aware ? 1 : 0,
                     overflow_edge_conflict ? 1 : 0, overflow_edge_conflict ? overflow_edge_quota : 0,
-                    improvement_commit ? 1 : 0, allow_maze ? 1 : 0, total_proposal_ms, total_commit_ms);
+                    improvement_commit ? 1 : 0, ripup_before_propose ? 1 : 0,
+                    allow_maze ? 1 : 0, total_proposal_ms, total_commit_ms);
         }
         return;
     }

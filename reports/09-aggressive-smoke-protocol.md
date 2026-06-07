@@ -867,7 +867,44 @@ Classification:
   therefore rejected the useful intermediate moves.
 - Do not run `legal7` for v7.4.
 
-v7.5 fix under test:
+v7.5 smoke result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_c49fff4_smoke_007_easy
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_c49fff4_smoke_007_hard
+```
+
+Run control:
+
+- launched as two independent background run dirs using `SMOKE_ROLES=easy` and
+  `SMOKE_ROLES=hard`;
+- easy `launcher.pid=2582767`, `launcher.pgid=2582767`;
+- hard `launcher.pid=2582774`, `launcher.pgid=2582774`;
+- each run used `ROUTER_THREADS=7`;
+- `newblue2` hit the `230s` gate with `exit_code=124`;
+- because the easy row timed out, the hard evaluator was stopped manually by
+  killing process groups `2582811` and `2582774`;
+- no active v7 process remained after kill.
+
+Key proposal diagnostic:
+
+```text
+proposal reroute phase rounds=6 hot_pool_scanned=98304 selected=10611
+proposed=3413 committed=554 rejected=2859 improvement_commit=1
+proposal reroute phase rounds=6 hot_pool_scanned=81920 selected=8687
+proposed=90 committed=77 rejected=13 improvement_commit=1
+```
+
+Classification:
+
+- Improvement commit helped some phases, but did not improve the smoke gate.
+- Runtime became worse than v7.4 and `newblue2` timed out before evaluation.
+- The remaining mismatch with original NTHU is proposal search state: original
+  serial `range_router` removes the old path before route search, while v7.5
+  still generated proposals on a snapshot where the old path was present.
+- Do not run `legal7` for v7.5.
+
+v7.6 fix under test:
 
 - keep proposal-only semantics: no serial `range_router()` fallback inside the
   v7 path;
@@ -876,14 +913,17 @@ v7.5 fix under test:
   2. sort the hot pool by overflow score;
   3. select a deterministic bounded set using unique net ids plus old-path
      overflow-edge quotas;
-  4. generate proposals in parallel;
-  5. commit proposals in deterministic order;
-  6. stop when no proposal commits or `NTHU_PROPOSAL_REROUTE_MAX_ROUNDS` is
+  4. sequentially rip up the selected old paths to create a stable proposal
+     snapshot;
+  5. generate proposals in parallel against that snapshot;
+  6. commit proposals in deterministic order, inserting the new path or
+     restoring the old path;
+  7. stop when no proposal commits or `NTHU_PROPOSAL_REROUTE_MAX_ROUNDS` is
      reached;
 - commit rule changes from strict zero-overflow to transactional improvement:
   after removing the old path, accept the proposal if its inserted overflow
   score improves by at least `NTHU_POST_ACCEPT_MIN_DELTA`;
-- fixed v7.5 config:
+- fixed v7.6 config:
 
 ```text
 NTHU_PROPOSAL_REROUTE_MAX_CANDIDATES=16384
@@ -893,12 +933,13 @@ NTHU_PROPOSAL_REROUTE_CONFLICT_AWARE=1
 NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_CONFLICT=1
 NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA=8
 NTHU_PROPOSAL_REROUTE_IMPROVEMENT_COMMIT=1
+NTHU_PROPOSAL_REROUTE_RIPUP_BEFORE_PROPOSE=1
 ```
 
 Expected diagnostic:
 
-- if commit count rises sharply and overflow decreases more than v7.4, the
-  issue was the overly strict zero-overflow commit rule;
+- if proposal success and commit count improve without the v7.5 timeout, the
+  issue was the missing rip-up snapshot;
 - if proposal time or overflow still fails the smoke gate, the current
   proposal engine needs a true soft-capacity/negotiation layer before legal7
   expansion.
