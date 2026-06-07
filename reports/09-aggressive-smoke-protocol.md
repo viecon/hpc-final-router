@@ -2412,3 +2412,40 @@ v8.36 planned support/config probe:
 - raise `snapshot_commit_max` to 1024 so the hard plateau can enter the
   snapshot/burst/global-gate path;
 - raise `snapshot_burst_total` to 64 while keeping `snapshot_burst_max=1`.
+
+v8.36 smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_df7d534_smoke_easyhard_burst64max1_snapshot1024_quota16_v8_36_openmp14t
+```
+
+Config:
+
+```text
+snapshot_commit_max=1024
+snapshot_global_gate=1
+snapshot_burst_total=64
+snapshot_burst_max=1
+proposal_edge_quota=16
+OpenMP threads=14
+```
+
+| Version | Benchmark | Summary seconds | Router-log seconds | Original seconds | WL | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- |
+| v8.36 | `newblue2` | 230 gate | 188.31 | 76.516170 | 8779075 | router log 0 / 0 | rejected |
+| v8.36 | `adaptec4` | killed after easy timeout | NA | 130.666544 | NA | NA | not evaluated |
+
+Evidence:
+
+```text
+newblue2: router reached 3D overflow 0 / max 0 and WL 8779075, but the summary row is timeout because router+evaluator exceeded the 230s easy gate.
+newblue2: snapshot_commit_max=1024 triggered global_gated strict repair at overflow 903, reducing to 438, then 253, but with large route_all/global-gate cost.
+```
+
+Classification:
+
+- This was a support/config failure, not an algorithmic improvement.
+- Raising the snapshot gate to 1024 is too expensive on the easy legal row.
+- The next config should lower the threshold to `512`, which avoids the heavy
+  `newblue2` gate at overflow 903 but still allows the `adaptec4` plateau near
+  407 to enter snapshot/burst/global-gate repair.
