@@ -682,6 +682,44 @@ Classification:
   overflow score and caps proposal work at top `16384` candidates.  This is a
   routing-state based task scheduling rule, not a benchmark-specific branch.
 
+v7.1 smoke result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_f7c9e38_smoke_003
+```
+
+Run control:
+
+- launched via background `setsid -f` from the VM;
+- `launcher.pid=2578064`, `launcher.pgid=2578064`;
+- `newblue2` hit its `230s` gate and exited with `exit_code=124`;
+- because the easy row already failed smoke, the remaining hard row was stopped
+  manually by killing process groups `2578382` and `2578064`;
+- no active v7 process remained after kill.
+
+Observed `newblue2` proposal rounds before timeout:
+
+| P2 iter | Candidates | Proposed | Committed | Rejected | Proposal ms | 2D overflow after |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 16384 | 5828 | 2197 | 3631 | 43162 | 52605 |
+| 2 | 16384 | 4267 | 389 | 3878 | 28990 | 50397 |
+| 3 | 16384 | 3947 | 64 | 3883 | 44859 | 50061 |
+| 4 | 16384 | 3864 | 10 | 3854 | 38228 | 50027 |
+| 5 | 16384 | 3845 | 0 | 3845 | 43208 | 50027 |
+
+Classification:
+
+- v7.1 fixed the v7.0 support issue of unbounded proposal work, but the
+  proposal-only logic is still not competitive on smoke.
+- The deterministic commit phase rejects most proposals after the first round
+  because many independently generated proposals target the same residual
+  congestion.  This is the exact conflict/livelock problem described by
+  collision-aware parallel routing papers.
+- Without a stronger conflict graph or soft-capacity negotiation before
+  proposal generation, this aggressive proposal-only path cannot clear even the
+  easy smoke row inside the 3x gate.
+- Do not run `legal7` for v7.1.  Keep v4/v5a as the legal baseline.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:
