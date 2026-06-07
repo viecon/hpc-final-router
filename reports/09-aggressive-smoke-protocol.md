@@ -904,7 +904,58 @@ Classification:
   still generated proposals on a snapshot where the old path was present.
 - Do not run `legal7` for v7.5.
 
-v7.6 fix under test:
+v7.6 smoke result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_ce50164_smoke_008_easy
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_ce50164_smoke_008_hard
+```
+
+Run control:
+
+- launched as two independent background run dirs using `SMOKE_ROLES=easy` and
+  `SMOKE_ROLES=hard`;
+- easy `launcher.pid=2585923`, `launcher.pgid=2585923`;
+- hard `launcher.pid=2585930`, `launcher.pgid=2585930`;
+- each run used `ROUTER_THREADS=7`;
+- no active v7 process remained after both summaries were written.
+
+Result:
+
+| Benchmark | Seconds | Original seconds | Runtime ratio | WL | Original WL | WL ratio | Overflow | Max overflow |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| newblue2 | 105.994150 | 76.516170 | 1.385 | 8795823 | 7595602 | 1.158 | 0 | 0 |
+| adaptec4 | 183.891179 | 130.666544 | 1.407 | 13565009 | 12207270 | 1.111 | 0 | 0 |
+
+Key proposal diagnostic:
+
+```text
+newblue2 first large phase:
+proposed=10893 committed=9826 rejected=1067 ripup_snapshot=1
+newblue2 final repair:
+cal max overflow=0 cur_cap-max_cap=0
+
+adaptec4 late repair:
+proposed=146 committed=60 rejected=86 ripup_snapshot=1
+proposed=2 committed=2 rejected=0 ripup_snapshot=1
+cal max overflow=0 cur_cap-max_cap=0
+```
+
+Classification:
+
+- v7.6 fixes the proposal-only correctness bug: batch rip-up snapshot plus
+  deterministic improvement commit can clear both smoke rows to
+  `overflow=0`.
+- The missing rip-up snapshot was the main problem.  v7.5 generated proposals
+  against the wrong congestion state; v7.6 proposal commit count rose from
+  hundreds to thousands in the first large phase.
+- It is not a performance winner.  Smoke runtime is about `1.39x-1.41x`
+  slower than original and much slower than the v5a/v4 legal baseline.
+- Do not promote v7.6 as the final router strategy for speed.  Keep it as the
+  technically correct proposal-only transaction prototype and retain v5a/v4 as
+  the legal performance baseline.
+
+Final v7.6 config:
 
 - keep proposal-only semantics: no serial `range_router()` fallback inside the
   v7 path;
@@ -923,8 +974,6 @@ v7.6 fix under test:
 - commit rule changes from strict zero-overflow to transactional improvement:
   after removing the old path, accept the proposal if its inserted overflow
   score improves by at least `NTHU_POST_ACCEPT_MIN_DELTA`;
-- fixed v7.6 config:
-
 ```text
 NTHU_PROPOSAL_REROUTE_MAX_CANDIDATES=16384
 NTHU_PROPOSAL_REROUTE_BATCH_SIZE=4096
@@ -935,14 +984,6 @@ NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA=8
 NTHU_PROPOSAL_REROUTE_IMPROVEMENT_COMMIT=1
 NTHU_PROPOSAL_REROUTE_RIPUP_BEFORE_PROPOSE=1
 ```
-
-Expected diagnostic:
-
-- if proposal success and commit count improve without the v7.5 timeout, the
-  issue was the missing rip-up snapshot;
-- if proposal time or overflow still fails the smoke gate, the current
-  proposal engine needs a true soft-capacity/negotiation layer before legal7
-  expansion.
 
 ## Guard Expansion: original-legal legal7
 
