@@ -2086,6 +2086,7 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     int total_proposed = 0;
     int total_committed = 0;
     int total_rejected = 0;
+    int total_rolled_back = 0;
     int no_progress_rounds = 0;
     double total_proposal_ms = 0.0;
     double total_commit_ms = 0.0;
@@ -2098,6 +2099,7 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     }
 
     for (int round = 1; round <= rounds && stats.total_overflow > 0; ++round) {
+        const OverflowStats round_start_stats = stats;
         std::vector<StrictRepairInput> inputs;
         inputs.reserve(twopin_list.size());
         for (Two_pin_element_2d* two_pin : twopin_list) {
@@ -2187,6 +2189,7 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
         int proposed = 0;
         int committed = 0;
         int rejected = 0;
+        bool rolled_back = false;
         if (snapshot_commit) {
             for (RerouteProposal& proposal : proposals) {
                 if (!proposal.proposed || proposal.path.size() < 2) {
@@ -2269,19 +2272,44 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
         const double commit_ms_value = profile_ms(commit_start, ProfileClock::now());
         stats = current_overflow_stats(congestion);
 
+        if (snapshot_commit && (stats.total_overflow > round_start_stats.total_overflow ||
+                (stats.total_overflow == round_start_stats.total_overflow &&
+                        stats.max_overflow > round_start_stats.max_overflow))) {
+            for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
+                Two_pin_element_2d& two_pin = *selected[i];
+                congestion.update_congestion_map_remove_two_pin_net(two_pin.path,
+                        two_pin.net_id);
+            }
+            for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
+                Two_pin_element_2d& two_pin = *selected[i];
+                two_pin.path = states[i].original_path;
+                two_pin.pin1 = states[i].original_pin1;
+                two_pin.pin2 = states[i].original_pin2;
+                congestion.update_congestion_map_insert_two_pin_net(two_pin);
+            }
+            stats = current_overflow_stats(congestion);
+            committed = 0;
+            rejected = proposed;
+            rolled_back = true;
+        }
+
         total_inputs += static_cast<int>(inputs.size());
         total_selected += static_cast<int>(selected.size());
         total_proposed += proposed;
         total_committed += committed;
         total_rejected += rejected;
+        if (rolled_back) {
+            ++total_rolled_back;
+        }
         total_proposal_ms += proposal_ms_value;
         total_commit_ms += commit_ms_value;
 
         if (do_log) {
-            log_sp->info("v8 strict legal repair round={} inputs={} selected={} conflict_skipped={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box={} edge_quota={} proposal_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("v8 strict legal repair round={} inputs={} selected={} conflict_skipped={} proposed={} committed={} rejected={} rolled_back={} total_overflow={} max_overflow={} box={} edge_quota={} proposal_ms={:.3f} commit_ms={:.3f}",
                     round, inputs.size(), selected.size(), conflict_skipped, proposed,
-                    committed, rejected, stats.total_overflow, stats.max_overflow,
-                    repair_box, edge_quota, proposal_ms_value, commit_ms_value);
+                    committed, rejected, rolled_back, stats.total_overflow,
+                    stats.max_overflow, repair_box, edge_quota, proposal_ms_value,
+                    commit_ms_value);
         }
 
         if (committed == 0) {
@@ -2295,10 +2323,10 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     }
 
     if (do_log) {
-        log_sp->info("v8 strict legal repair phase inputs={} selected={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} proposal_ms={:.3f} commit_ms={:.3f}",
+        log_sp->info("v8 strict legal repair phase inputs={} selected={} proposed={} committed={} rejected={} rolled_back={} total_overflow={} max_overflow={} proposal_ms={:.3f} commit_ms={:.3f}",
                 total_inputs, total_selected, total_proposed, total_committed,
-                total_rejected, stats.total_overflow, stats.max_overflow,
-                total_proposal_ms, total_commit_ms);
+                total_rejected, total_rolled_back, stats.total_overflow,
+                stats.max_overflow, total_proposal_ms, total_commit_ms);
     }
 }
 
