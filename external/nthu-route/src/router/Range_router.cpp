@@ -443,6 +443,18 @@ bool v8_strict_legal_repair_snapshot_commit_enabled() {
     return std::atoi(value) != 0;
 }
 
+int v8_strict_legal_repair_snapshot_commit_max_overflow() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_SNAPSHOT_COMMIT_MAX_OVERFLOW");
+    if (value == nullptr || *value == '\0') {
+        return std::numeric_limits<int>::max();
+    }
+    const int parsed = std::atoi(value);
+    if (parsed <= 0) {
+        return std::numeric_limits<int>::max();
+    }
+    return parsed;
+}
+
 bool v8_strict_legal_repair_improvement_commit_enabled() {
     const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_IMPROVEMENT_COMMIT");
     if (value == nullptr || *value == '\0') {
@@ -2088,6 +2100,8 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     const int box_inc = v8_strict_legal_repair_box_inc();
     const int max_no_progress = v8_strict_legal_repair_max_no_progress();
     const bool snapshot_commit = v8_strict_legal_repair_snapshot_commit_enabled();
+    const int snapshot_commit_max_overflow =
+            v8_strict_legal_repair_snapshot_commit_max_overflow();
     const bool improvement_commit = v8_strict_legal_repair_improvement_commit_enabled();
 
     int total_inputs = 0;
@@ -2101,10 +2115,11 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     double total_commit_ms = 0.0;
 
     if (do_log) {
-        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} improvement_commit={}",
+        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} snapshot_commit_max={} improvement_commit={}",
                 stats.total_overflow, stats.max_overflow, trigger, max_overflow,
                 rounds, max_candidates, batch_size, edge_quota, base_box,
-                fixed_base_box, box_inc, snapshot_commit, improvement_commit);
+                fixed_base_box, box_inc, snapshot_commit,
+                snapshot_commit_max_overflow, improvement_commit);
     }
 
     for (int round = 1; round <= rounds && stats.total_overflow > 0; ++round) {
@@ -2199,7 +2214,9 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
         int committed = 0;
         int rejected = 0;
         bool rolled_back = false;
-        if (snapshot_commit) {
+        const bool use_snapshot_commit = snapshot_commit &&
+                round_start_stats.total_overflow <= snapshot_commit_max_overflow;
+        if (use_snapshot_commit) {
             for (RerouteProposal& proposal : proposals) {
                 if (!proposal.proposed || proposal.path.size() < 2) {
                     continue;
@@ -2288,7 +2305,7 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
         const double commit_ms_value = profile_ms(commit_start, ProfileClock::now());
         stats = current_overflow_stats(congestion);
 
-        if (snapshot_commit && (stats.total_overflow > round_start_stats.total_overflow ||
+        if (use_snapshot_commit && (stats.total_overflow > round_start_stats.total_overflow ||
                 (stats.total_overflow == round_start_stats.total_overflow &&
                         stats.max_overflow > round_start_stats.max_overflow))) {
             for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
@@ -2321,11 +2338,11 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
         total_commit_ms += commit_ms_value;
 
         if (do_log) {
-            log_sp->info("v8 strict legal repair round={} inputs={} selected={} conflict_skipped={} proposed={} committed={} rejected={} rolled_back={} total_overflow={} max_overflow={} box={} edge_quota={} proposal_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("v8 strict legal repair round={} inputs={} selected={} conflict_skipped={} proposed={} committed={} rejected={} snapshot_round={} rolled_back={} total_overflow={} max_overflow={} box={} edge_quota={} proposal_ms={:.3f} commit_ms={:.3f}",
                     round, inputs.size(), selected.size(), conflict_skipped, proposed,
-                    committed, rejected, rolled_back, stats.total_overflow,
-                    stats.max_overflow, repair_box, edge_quota, proposal_ms_value,
-                    commit_ms_value);
+                    committed, rejected, use_snapshot_commit, rolled_back,
+                    stats.total_overflow, stats.max_overflow, repair_box, edge_quota,
+                    proposal_ms_value, commit_ms_value);
         }
 
         if (committed == 0) {
