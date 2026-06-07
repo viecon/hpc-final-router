@@ -1567,6 +1567,64 @@ Next experiment:
 - if a smoke row is slower than 3x original, kill the process group and
   classify the issue before continuing.
 
+### v8.9 Runtime Emergency Smoke And Guard Abort
+
+Smoke run roots:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_ccf61c2_smoke_018_easy_runtime_emergency_14t
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_ccf61c2_smoke_019_hard_runtime_emergency_14t
+```
+
+Smoke result:
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Emergency |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.9 | fast default + late emergency | `newblue2` | 67.779847 | 76.516170 | 1.129x | 1.158 | 0 / 0 | no |
+| v8.9 | same | `adaptec4` | 106.832822 | 130.666544 | 1.223x | 1.111 | 0 / 0 | no |
+
+Guard run:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_ccf61c2_legal7_runtime_emergency_2x7t
+```
+
+Partial guard result:
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.9 guard | 2 jobs x 7 threads | `adaptec1` | 464.100994 | 441.962666 | 0.952x | 1.232 | 794 / 2 | rejected, original-legal row failed |
+| v8.9 guard | same | `adaptec3` | 357.507412 | 479.186273 | 1.340x | 1.144 | 0 / 0 | legal |
+
+Diagnosis:
+
+- v8.9 activated emergency too late on `adaptec1`: the fast path reached
+  internal overflow 3654 at iteration 16, then emergency reduced it only to
+  397 by iteration 32;
+- evaluator still reported `total_overflow=794`, `max_overflow=2`, so the
+  guard was killed after `adaptec1` completed;
+- the previous legal highcov+p2x32 probe succeeded because high coverage was
+  applied earlier, not only as a last-stage rescue.
+
+### v8.10 Early Emergency Design
+
+Design change:
+
+- keep the v8.9 fast default for normal rows;
+- add `NTHU_V8_EMERGENCY_EARLY_TRIGGER`, default `30000`;
+- when adaptive repair begins and the measured 2-D overflow is above this
+  trigger, temporarily switch direct/proposal budgets to highcov values and
+  extend P2 to `NTHU_V8_EMERGENCY_P2_MAX_ITER=32`;
+- restore normal direct/proposal limits after the adaptive loop.
+
+Why this is not benchmark hardcoding:
+
+- the decision uses only runtime routing state: remaining overflow after the
+  fast path;
+- smoke rows that are already easy enough should stay on the fast path;
+- high-residual rows such as `adaptec1` get high coverage before the solution
+  enters a low-progress tail.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:

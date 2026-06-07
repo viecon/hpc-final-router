@@ -896,6 +896,33 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
                     adaptive_max_iter = limited_max_iter;
                 }
             }
+
+            bool early_emergency_active = false;
+            int old_direct_limit_override = v8_direct_route_all_limit_override;
+            int old_proposal_max_override = v8_proposal_max_candidates_override;
+            int old_proposal_batch_override = v8_proposal_batch_size_override;
+            const int early_emergency_trigger =
+                    std::max(0, env_int("NTHU_V8_EMERGENCY_EARLY_TRIGGER", 0));
+            if (v8_emergency_repair_enabled() && early_emergency_trigger > 0 &&
+                    cur_overflow >= early_emergency_trigger) {
+                early_emergency_active = true;
+                v8_direct_route_all_limit_override =
+                        std::max(1, env_int("NTHU_V8_EMERGENCY_DIRECT_LIMIT", 32768));
+                v8_proposal_max_candidates_override =
+                        std::max(1, env_int("NTHU_V8_EMERGENCY_PROPOSAL_MAX_CANDIDATES", 32768));
+                v8_proposal_batch_size_override =
+                        std::max(1, env_int("NTHU_V8_EMERGENCY_PROPOSAL_BATCH_SIZE", 8192));
+                const int emergency_max_iter =
+                        env_int("NTHU_V8_EMERGENCY_P2_MAX_ITER", adaptive_max_iter);
+                if (emergency_max_iter > adaptive_max_iter) {
+                    adaptive_max_iter = emergency_max_iter;
+                }
+                log_sp->info("v8 early emergency repair enabled: overflow={} trigger={} current_iter={} max_iter={} direct_limit={} proposal_max={} proposal_batch={}",
+                        cur_overflow, early_emergency_trigger, current_iter, adaptive_max_iter,
+                        v8_direct_route_all_limit_override, v8_proposal_max_candidates_override,
+                        v8_proposal_batch_size_override);
+            }
+
             log_sp->info("adaptive legal repair enabled: overflow={} trigger={} current_iter={} max_iter={}",
                     cur_overflow, trigger, current_iter, adaptive_max_iter);
             const int adaptive_direct_limit = adaptive_direct_overflow_limit();
@@ -953,6 +980,11 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
                 BOXSIZE_INC += routingparam.get_box_size_inc_p2();
             }
             force_direct_overflow_candidates = false;
+            if (early_emergency_active) {
+                v8_direct_route_all_limit_override = old_direct_limit_override;
+                v8_proposal_max_candidates_override = old_proposal_max_override;
+                v8_proposal_batch_size_override = old_proposal_batch_override;
+            }
             output_2_pin_list();
             post_processing.process(route_2pinnets);
 
