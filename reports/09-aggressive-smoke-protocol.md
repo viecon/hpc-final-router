@@ -1924,3 +1924,89 @@ Acceptance for this guard:
   rows remain legal; original-overflow rows are reported separately;
 - if `legal7` is legal and faster than `prev_final` on aggregate, expand to the
   requested benchmark set.
+
+## v8.14-v8.16: Proposal Parallelism Correctness Audit
+
+Reference ideas checked:
+
+| Paper | Relevant idea | Local interpretation |
+| --- | --- | --- |
+| NCTU-GR 2.0, DAC/TCAD 2010, DOI `10.1145/1837274.1837324` | collision-aware task scheduling and bounded-length maze routing | select parallel work by routing-state conflicts, not by benchmark name |
+| Shintani et al., DSD 2013, DOI `10.1109/DSD.2013.70` | parallel route search followed by exclusive/cancelable area update | keep proposal search parallel, but make congestion update deterministic and checked |
+| SPRoute, ICCAD 2019, DOI `10.1109/ICCAD45719.2019.8942105` | start with net-level parallelism, lower parallelism when livelock/conflicts block convergence | classify failed smoke as conflict/convergence limits rather than blindly increasing threads |
+
+v8.14 strict-proposal result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_9c5b3a1_bigblue1_strictproposal_tail25k_14t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.14 | strict legal maze proposal + strict tail, 14 threads | `bigblue1` | 154.037570 | 1206.306768 | 7.831x | 1.207 | 216358 / 34 | rejected, fast but illegal |
+
+Classification:
+
+- The runtime frontier is real, but legality is not close enough.
+- Strict proposal/tail did not remove the high-congestion plateau; it must not be
+  presented as a final legal result.
+
+v8.15 strict legal repair design:
+
+- after the v8 proposal initial route, select overflowed two-pin paths;
+- remove selected old paths, run strict-capacity maze proposal in parallel;
+- restore every original path before commit;
+- deterministic serial commit removes only the candidate's own old path, then
+  accepts only if the proposal can be inserted without overflow.
+
+This is the safe version of the DSD-style "parallel route-search, exclusive
+area-update, cancel on violation" pattern.
+
+v8.15 smoke records:
+
+| Run | Build/config | Benchmark | Result | Classification |
+| --- | --- | --- | --- | --- |
+| `strictrepair_v8_15_14t` | wrong default build dir, OpenMP off | `newblue2` | 42.963665s, WL 8758589, overflow 0 / 0 | support/config error, not valid as 14-thread evidence |
+| `strictrepair_v8_15_openmp14t` | OpenMP build, high low-tail budget | `newblue2` | killed at 230s gate | support/config error, low-tail/global repair budget dominated runtime |
+| `strictrepair_v8_15b_openmp14t` | OpenMP build, strict trigger 30k | `newblue2` | 109.886664s, WL 8797634, overflow 1614 / 26 | rejected, early strict repair perturbed an original-legal case |
+| `strictrepair_v8_15c_trigger80k_openmp14t` | OpenMP build, strict trigger 80k | `newblue2` | 117.656313s, WL 8788554, overflow 1584 / 24 | rejected, OpenMP proposal remains illegal even when strict repair is skipped |
+
+Key diagnosis from v8.15c:
+
+- OpenMP proposal search is not the only issue; the main proposal commit path
+  still commits while all selected old paths are removed from the shared
+  congestion map.
+- If a proposal is accepted in that reduced snapshot, later rejected candidates
+  restore their old paths afterward.  That can invalidate an earlier acceptance.
+- This is a correctness bug in the transaction/commit protocol, not a reason to
+  abandon net-level parallel route search.
+- The strict legal repair phase itself is thread-safe, but too weak on
+  `bigblue1`: at around 111k 2D overflow, it often selected 48 candidates and
+  committed 0-1 legal paths per round.
+
+v8.16 safe proposal commit change:
+
+- add env flag `NTHU_PROPOSAL_REROUTE_SAFE_COMMIT`;
+- keep parallel proposal generation on the ripped-up snapshot;
+- before deterministic commit, restore all selected original paths;
+- commit one proposal at a time on the real current congestion map by removing
+  only that two-pin's old path;
+- recompute the current old-path overflow score when safe commit is active,
+  instead of reusing the pre-snapshot score;
+- expose the flag through `V8_PROPOSAL_SAFE_COMMIT` in VM smoke/guard helpers.
+
+Expected smoke:
+
+```text
+BUILD_DIR=/home/ubuntu/hpc-final-router/external/nthu-route/build-release-vm-openmp-current
+ROUTER_OPENMP=ON
+ROUTER_THREADS=14
+V8_PROPOSAL_SAFE_COMMIT=1
+BENCH_LIST_OVERRIDE=newblue2.fastplace90.3d.50.20.100,adaptec4.aplace60.3d.30.50.90
+```
+
+Acceptance for the next smoke:
+
+- `newblue2` must return to `overflow=0,max_overflow=0` because original is legal;
+- any run over the 3x original gate is killed and classified;
+- if easy+hard smoke passes, expand to `legal7` with the exact same config.
