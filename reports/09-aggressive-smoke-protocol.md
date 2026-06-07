@@ -1234,6 +1234,44 @@ This is classified as a support/scheduler issue inside the same direct-proposal
 experiment, not a rejection of the v8 idea yet.  Rebuild and rerun the same
 easy+hard smoke after committing the scheduler fix.
 
+### v8.3 Scheduler Fix Result
+
+Commit:
+
+```text
+dab712f Fix v8 low-overflow proposal starvation
+```
+
+Run root:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_dab712f_smoke_006_easy_scheduler_14t
+```
+
+Result:
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.3 | 16k/r6 + reject cooldown + low-edge oversubscribe | `newblue2` | 71.749737 | 76.516170 | 1.066x | 1.156 | 1084 / 6 | rejected |
+
+Diagnosis:
+
+- `NTHU_V8_REJECT_COOLDOWN=1` is still plausible: it only prevents a rejected
+  candidate from being selected again inside the same proposal phase.
+- `NTHU_V8_LOW_OVERFLOW_EDGE_OVERSUBSCRIBE=1` is not safe as a default.  It
+  allowed many same-edge candidates to be proposed in the same low-overflow
+  phase; deterministic per-path improvement commit accepted many local moves,
+  but the combined effect increased global overflow.
+- Therefore oversubscribe is classified as invalid optimization logic for this
+  router state.  It remains an opt-in experiment in code, but it is removed from
+  the runner default.
+
+Next run:
+
+- v8.4 uses the same 16k/r6 direct proposal config and keeps only
+  `NTHU_V8_REJECT_COOLDOWN=1`;
+- easy smoke must be legal before hard is run.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:
