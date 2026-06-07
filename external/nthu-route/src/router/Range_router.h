@@ -105,7 +105,8 @@ public:
     bool commit_reroute_proposal(Two_pin_element_2d& two_pin,
             const std::vector<Coordinate_2d>& proposed_path, int version,
             bool old_path_removed = false, int known_old_path_overflow_score = -1,
-            int phase_start_total_overflow = -1, bool* accepted_by_global_gate = nullptr);
+            int phase_start_total_overflow = -1, bool* accepted_by_global_gate = nullptr,
+            bool* evaluated_global_gate = nullptr);
     void route_twopin_candidates(std::vector<Two_pin_element_2d*>& twopin_list, int version);
     bool try_l_shape_fastpath(Two_pin_element_2d& two_pin);
     bool try_dogleg_fastpath(Two_pin_element_2d& two_pin);
