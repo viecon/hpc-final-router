@@ -51,6 +51,18 @@ int env_int(const char* name, int default_value) {
 bool adaptive_legal_repair_enabled() {
     return std::getenv("NTHU_ADAPTIVE_LEGAL_REPAIR") != nullptr;
 }
+
+int adaptive_direct_overflow_limit() {
+    return std::max(0, env_int("NTHU_ADAPTIVE_DIRECT_OVERFLOW_LIMIT", 0));
+}
+
+int final_direct_overflow_limit() {
+    return std::max(0, env_int("NTHU_FINAL_DIRECT_OVERFLOW_REPAIR_LIMIT", 0));
+}
+
+int final_direct_overflow_rounds() {
+    return std::max(0, env_int("NTHU_FINAL_DIRECT_OVERFLOW_REPAIR_ROUNDS", 0));
+}
 }
 
 namespace NTHUR {
@@ -730,6 +742,7 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
 {
     log_sp = spdlog::get("NTHUR");
     force_route_remainder = false;
+    force_direct_overflow_candidates = false;
     /***********************
      * Global Variable End
      * ********************/
@@ -878,6 +891,7 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
             }
             log_sp->info("adaptive legal repair enabled: overflow={} trigger={} current_iter={} max_iter={}",
                     cur_overflow, trigger, current_iter, adaptive_max_iter);
+            const int adaptive_direct_limit = adaptive_direct_overflow_limit();
             route_2pinnets.reallocate_two_pin_list();
             mazeroute_in_range.clear_net_tree();
             congestion.used_cost_flag = HISTORY_COST;
@@ -887,6 +901,12 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
                 congestion.cur_iter = iter;
                 done_iter = congestion.cur_iter;
                 log_sp->info("Adaptive repair P2 iteration: {} ", congestion.cur_iter);
+                force_direct_overflow_candidates =
+                        adaptive_direct_limit > 0 && cur_overflow <= adaptive_direct_limit;
+                if (force_direct_overflow_candidates) {
+                    log_sp->info("adaptive direct-overflow P2 enabled: overflow={} limit={}",
+                            cur_overflow, adaptive_direct_limit);
+                }
 
                 congestion.factor = (1.0 - std::exp(-5 * std::exp(-(0.1 * congestion.cur_iter))));
                 congestion.WL_Cost = congestion.factor;
@@ -925,10 +945,66 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
                 }
                 BOXSIZE_INC += routingparam.get_box_size_inc_p2();
             }
+            force_direct_overflow_candidates = false;
             output_2_pin_list();
             post_processing.process(route_2pinnets);
 
             cur_overflow = congestion.cal_max_overflow();
+            const int direct_repair_limit = final_direct_overflow_limit();
+            const int direct_repair_rounds = final_direct_overflow_rounds();
+            if (cur_overflow > trigger && direct_repair_rounds > 0 &&
+                    (direct_repair_limit == 0 || cur_overflow <= direct_repair_limit)) {
+                log_sp->info("final direct-overflow repair enabled: overflow={} trigger={} limit={} rounds={}",
+                        cur_overflow, trigger, direct_repair_limit, direct_repair_rounds);
+                const int direct_start_box_size = BOXSIZE_INC;
+                force_direct_overflow_candidates = true;
+                route_2pinnets.reallocate_two_pin_list();
+                mazeroute_in_range.clear_net_tree();
+                congestion.used_cost_flag = HISTORY_COST;
+                for (int round = 0; round < direct_repair_rounds; ++round) {
+                    ++congestion.cur_iter;
+                    done_iter = congestion.cur_iter;
+                    log_sp->info("Final direct-overflow repair P2 round: {} iter={}",
+                            round + 1, congestion.cur_iter);
+
+                    congestion.factor = (1.0 - std::exp(-5 * std::exp(-(0.1 * congestion.cur_iter))));
+                    congestion.WL_Cost = congestion.factor;
+                    congestion.via_cost = static_cast<int>(4 * congestion.factor);
+
+                    auto iter_start = ProfileClock::now();
+                    profile_start = ProfileClock::now();
+                    congestion.pre_evaluate_congestion_cost();
+                    const double pre_eval_ms = profile_ms(profile_start, ProfileClock::now());
+
+                    profile_start = ProfileClock::now();
+                    route_2pinnets.route_all_2pin_net();
+                    const double route_all_ms = profile_ms(profile_start, ProfileClock::now());
+
+                    profile_start = ProfileClock::now();
+                    cur_overflow = congestion.cal_max_overflow();
+                    const double overflow_ms = profile_ms(profile_start, ProfileClock::now());
+                    profile_start = ProfileClock::now();
+                    congestion.cal_total_wirelength();
+                    const double wirelength_ms = profile_ms(profile_start, ProfileClock::now());
+                    if (do_profile) {
+                        log_sp->info("profile final_direct_round={} pre_eval_ms={:.3f} route_all_ms={:.3f} overflow_ms={:.3f} wirelength_ms={:.3f} total_ms={:.3f}",
+                                round + 1, pre_eval_ms, route_all_ms, overflow_ms, wirelength_ms,
+                                profile_ms(iter_start, ProfileClock::now()));
+                    }
+                    if (cur_overflow == 0) {
+                        log_sp->info("Final direct-overflow repair reached overflow = 0");
+                        break;
+                    }
+                    route_2pinnets.reallocate_two_pin_list();
+                    BOXSIZE_INC += routingparam.get_box_size_inc_p2();
+                }
+                force_direct_overflow_candidates = false;
+                output_2_pin_list();
+                post_processing.process(route_2pinnets);
+                cur_overflow = congestion.cal_max_overflow();
+                BOXSIZE_INC = direct_start_box_size;
+            }
+            force_direct_overflow_candidates = false;
             const int final_full_limit = env_int("NTHU_FINAL_FULL_REMAINDER_REPAIR_LIMIT", 0);
             const int final_full_rounds = env_int("NTHU_FINAL_FULL_REMAINDER_REPAIR_ROUNDS", 0);
             if (cur_overflow > trigger && final_full_limit > 0 && final_full_rounds > 0 &&

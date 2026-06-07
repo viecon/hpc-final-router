@@ -541,6 +541,58 @@ Classification:
 - v5a is being expanded to `legal7` as the safer OpenMP control.  Conflict
   batching remains an experimental branch, not the current best candidate.
 
+### v6 Residual Direct-Overflow Repair Candidate
+
+Previous version:
+
+```text
+frontier_adaptive_late_score1_v4
+frontier_openmp_control_v5a
+```
+
+Implementation delta:
+
+- add `Construct_2d_tree::force_direct_overflow_candidates` so a repair phase
+  can use the existing direct-overflow candidate path without enabling it for
+  the whole run;
+- keep the same NTHU `range_router()` rip-up/reroute/commit semantics after
+  candidates are selected;
+- in adaptive repair, enable direct-overflow P2 only when measured overflow is
+  at or below `NTHU_ADAPTIVE_DIRECT_OVERFLOW_LIMIT`;
+- before final full-remainder fallback, try
+  `NTHU_FINAL_DIRECT_OVERFLOW_REPAIR_ROUNDS` rounds when measured overflow is
+  at or below `NTHU_FINAL_DIRECT_OVERFLOW_REPAIR_LIMIT`;
+- restore `BOXSIZE_INC` after the prepass so a failed direct prepass does not
+  silently alter the existing full-remainder fallback.
+
+Fixed v6 config under test:
+
+```text
+frontier_direct_residual_v6
+NTHU_ADAPTIVE_DIRECT_OVERFLOW_LIMIT=80
+NTHU_FINAL_DIRECT_OVERFLOW_REPAIR_LIMIT=80
+NTHU_FINAL_DIRECT_OVERFLOW_REPAIR_ROUNDS=3
+```
+
+Reasoning:
+
+- The original NTHU flow is still sequential and order-sensitive, but low
+  residual overflow does not always need another full interval expansion over
+  every candidate range.
+- This is a routing-state based narrowing step, not a benchmark-specific row
+  choice.  It follows the same general direction as collision-aware repair
+  scheduling in NCTU-GR and adaptive parallelism in SPRoute: focus work on
+  currently conflicting routes first, then fall back to the conservative serial
+  repair if residual overflow remains.
+
+Smoke rule:
+
+- run the standard easy/hard pair (`newblue2`, `adaptec4`) against original
+  baselines;
+- if either row exceeds the 3x-original timeout gate, kill and classify;
+- if smoke is legal and not slower, expand to `legal7`; otherwise keep v4/v5a
+  as the best legal baseline.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:

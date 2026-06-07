@@ -1729,7 +1729,9 @@ void NTHUR::RangeRouter::specify_all_range(boost::multi_array<Point_fc, 2>& grid
 
     total_twopin = 0;
 
-    if (direct_overflow_candidates_enabled()) {
+    const bool use_direct_overflow_candidates =
+            direct_overflow_candidates_enabled() || construct_2d_tree.force_direct_overflow_candidates;
+    if (use_direct_overflow_candidates) {
         struct Candidate {
             Two_pin_element_2d* two_pin;
             int overflow_score;
