@@ -720,6 +720,36 @@ Classification:
   easy smoke row inside the 3x gate.
 - Do not run `legal7` for v7.1.  Keep v4/v5a as the legal baseline.
 
+v7.2 fix under test:
+
+- keep proposal-only semantics: no serial `range_router()` fallback inside the
+  v7 path;
+- split each route phase into multiple transaction rounds:
+  1. recompute current overflow score;
+  2. sort the hot pool by overflow score;
+  3. select a deterministic independent set using conservative conflict boxes
+     and unique net ids;
+  4. generate proposals in parallel;
+  5. commit proposals in deterministic order;
+  6. stop when no proposal commits or `NTHU_PROPOSAL_REROUTE_MAX_ROUNDS` is
+     reached;
+- fixed v7.2 config:
+
+```text
+NTHU_PROPOSAL_REROUTE_MAX_CANDIDATES=16384
+NTHU_PROPOSAL_REROUTE_BATCH_SIZE=4096
+NTHU_PROPOSAL_REROUTE_MAX_ROUNDS=6
+NTHU_PROPOSAL_REROUTE_CONFLICT_AWARE=1
+```
+
+Expected diagnostic:
+
+- if commit rejection drops and overflow decreases per round, the issue was the
+  missing conflict graph;
+- if proposal time or overflow still fails the smoke gate, the current
+  conflict-box model is too conservative or the proposal engine needs a true
+  soft-capacity/negotiation layer before legal7 expansion.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:

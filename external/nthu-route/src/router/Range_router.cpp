@@ -210,6 +210,10 @@ bool proposal_reroute_log_enabled() {
     return std::getenv("NTHU_PROPOSAL_REROUTE_LOG") != nullptr;
 }
 
+bool proposal_reroute_conflict_aware_enabled() {
+    return std::getenv("NTHU_PROPOSAL_REROUTE_CONFLICT_AWARE") != nullptr;
+}
+
 int proposal_reroute_max_candidates() {
     const char* value = std::getenv("NTHU_PROPOSAL_REROUTE_MAX_CANDIDATES");
     if (value == nullptr || *value == '\0') {
@@ -220,6 +224,22 @@ int proposal_reroute_max_candidates() {
         return std::numeric_limits<int>::max();
     }
     return parsed;
+}
+
+int proposal_reroute_batch_size() {
+    const char* value = std::getenv("NTHU_PROPOSAL_REROUTE_BATCH_SIZE");
+    if (value == nullptr || *value == '\0') {
+        return 4096;
+    }
+    return std::max(1, std::atoi(value));
+}
+
+int proposal_reroute_max_rounds() {
+    const char* value = std::getenv("NTHU_PROPOSAL_REROUTE_MAX_ROUNDS");
+    if (value == nullptr || *value == '\0') {
+        return 1;
+    }
+    return std::max(1, std::atoi(value));
 }
 
 bool parallel_reroute_log_enabled() {
@@ -1592,7 +1612,6 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
     if (proposal_reroute_batches_enabled() && !twopin_list.empty()) {
         const bool do_profile = profile_enabled();
         const bool do_log = do_profile || proposal_reroute_log_enabled();
-        const auto proposal_start = ProfileClock::now();
         struct ProposalInput {
             Two_pin_element_2d* two_pin;
             int overflow_score;
@@ -1609,98 +1628,170 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 (score_until_iter >= 0 && (version == 3 || congestion.cur_iter > score_until_iter))) {
             min_reroute_score = 1;
         }
-        std::vector<ProposalInput> proposal_inputs;
-        proposal_inputs.reserve(twopin_list.size());
-        for (Two_pin_element_2d* two_pin : twopin_list) {
-            const int overflow_score = path_overflow_score(*two_pin, congestion);
-            if (overflow_score >= min_reroute_score) {
-                proposal_inputs.push_back(ProposalInput { two_pin, overflow_score });
-            }
-        }
-        if (proposal_inputs.empty()) {
-            return;
-        }
-        std::sort(proposal_inputs.begin(), proposal_inputs.end(),
-                [](const ProposalInput& a, const ProposalInput& b) {
-                    if (a.overflow_score != b.overflow_score) {
-                        return a.overflow_score > b.overflow_score;
-                    }
-                    return Two_pin_element_2d::comp_stn_2pin(*a.two_pin, *b.two_pin);
-                });
-
-        const int max_candidates = proposal_reroute_max_candidates();
-        if (max_candidates < static_cast<int>(proposal_inputs.size())) {
-            proposal_inputs.resize(max_candidates);
-        }
-        std::vector<Two_pin_element_2d*> overflow_twopins;
-        overflow_twopins.reserve(proposal_inputs.size());
-        for (const ProposalInput& input : proposal_inputs) {
-            overflow_twopins.push_back(input.two_pin);
-        }
-
-        std::vector<RerouteProposal> proposals(overflow_twopins.size());
         const bool allow_maze = proposal_reroute_maze_enabled();
+        const bool conflict_aware = proposal_reroute_conflict_aware_enabled();
+        const int max_candidates = proposal_reroute_max_candidates();
+        const int batch_size = proposal_reroute_batch_size();
+        const int max_rounds = proposal_reroute_max_rounds();
 
+        int total_inputs = 0;
+        int total_selected = 0;
+        int total_conflict_skipped = 0;
+        int total_proposal_success = 0;
+        int total_proposal_commits = 0;
+        int total_proposal_rejects = 0;
+        double total_proposal_ms = 0.0;
+        double total_commit_ms = 0.0;
+
+        for (int proposal_round = 1; proposal_round <= max_rounds; ++proposal_round) {
+            std::vector<ProposalInput> proposal_inputs;
+            proposal_inputs.reserve(twopin_list.size());
+            for (Two_pin_element_2d* two_pin : twopin_list) {
+                const int overflow_score = path_overflow_score(*two_pin, congestion);
+                if (overflow_score >= min_reroute_score) {
+                    proposal_inputs.push_back(ProposalInput { two_pin, overflow_score });
+                }
+            }
+            if (proposal_inputs.empty()) {
+                break;
+            }
+            std::sort(proposal_inputs.begin(), proposal_inputs.end(),
+                    [](const ProposalInput& a, const ProposalInput& b) {
+                        if (a.overflow_score != b.overflow_score) {
+                            return a.overflow_score > b.overflow_score;
+                        }
+                        return Two_pin_element_2d::comp_stn_2pin(*a.two_pin, *b.two_pin);
+                    });
+
+            if (max_candidates < static_cast<int>(proposal_inputs.size())) {
+                proposal_inputs.resize(max_candidates);
+            }
+
+            std::vector<Two_pin_element_2d*> overflow_twopins;
+            overflow_twopins.reserve(std::min(batch_size, static_cast<int>(proposal_inputs.size())));
+            int conflict_skipped = 0;
+            if (conflict_aware) {
+                std::vector<Rectangle> selected_boxes;
+                selected_boxes.reserve(std::min(batch_size, static_cast<int>(proposal_inputs.size())));
+                std::unordered_set<int> selected_net_ids;
+                selected_net_ids.reserve(std::min(batch_size, static_cast<int>(proposal_inputs.size())));
+                for (const ProposalInput& input : proposal_inputs) {
+                    if (static_cast<int>(overflow_twopins.size()) >= batch_size) {
+                        break;
+                    }
+                    bool conflict = selected_net_ids.find(input.two_pin->net_id) != selected_net_ids.end();
+                    const Rectangle box = reroute_conflict_box(*input.two_pin, construct_2d_tree, nullptr);
+                    if (!conflict) {
+                        for (const Rectangle& selected_box : selected_boxes) {
+                            if (boxes_overlap(box, selected_box)) {
+                                conflict = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (conflict) {
+                        ++conflict_skipped;
+                        continue;
+                    }
+                    selected_net_ids.insert(input.two_pin->net_id);
+                    selected_boxes.push_back(box);
+                    overflow_twopins.push_back(input.two_pin);
+                }
+            } else {
+                const int selected_count = std::min(batch_size, static_cast<int>(proposal_inputs.size()));
+                for (int i = 0; i < selected_count; ++i) {
+                    overflow_twopins.push_back(proposal_inputs[i].two_pin);
+                }
+            }
+            if (overflow_twopins.empty()) {
+                break;
+            }
+
+            std::vector<RerouteProposal> proposals(overflow_twopins.size());
+            const auto proposal_start = ProfileClock::now();
 #ifdef NTHU_ROUTE_OPENMP
 #pragma omp parallel
-        {
+            {
+                MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
+                Multisource_multisink_mazeroute local_maze(construct_2d_tree, congestion);
+                local_maze.set_rebuild_tree_from_twopins(true);
+#pragma omp for schedule(dynamic, 1)
+                for (int i = 0; i < static_cast<int>(overflow_twopins.size()); ++i) {
+                    proposals[i].two_pin = overflow_twopins[i];
+                    proposals[i].proposed = propose_reroute_path(*overflow_twopins[i], version,
+                            local_monotonic, allow_maze ? &local_maze : nullptr, allow_maze,
+                            proposals[i].path);
+                }
+            }
+#else
             MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
             Multisource_multisink_mazeroute local_maze(construct_2d_tree, congestion);
             local_maze.set_rebuild_tree_from_twopins(true);
-#pragma omp for schedule(dynamic, 1)
             for (int i = 0; i < static_cast<int>(overflow_twopins.size()); ++i) {
                 proposals[i].two_pin = overflow_twopins[i];
                 proposals[i].proposed = propose_reroute_path(*overflow_twopins[i], version,
                         local_monotonic, allow_maze ? &local_maze : nullptr, allow_maze,
                         proposals[i].path);
             }
-        }
-#else
-        MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
-        Multisource_multisink_mazeroute local_maze(construct_2d_tree, congestion);
-        local_maze.set_rebuild_tree_from_twopins(true);
-        for (int i = 0; i < static_cast<int>(overflow_twopins.size()); ++i) {
-            proposals[i].two_pin = overflow_twopins[i];
-            proposals[i].proposed = propose_reroute_path(*overflow_twopins[i], version,
-                    local_monotonic, allow_maze ? &local_maze : nullptr, allow_maze,
-                    proposals[i].path);
-        }
 #endif
 
-        const double proposal_ms_value = profile_ms(proposal_start, ProfileClock::now());
-        const auto commit_start = ProfileClock::now();
-        int proposal_success = 0;
-        int proposal_commits = 0;
-        int proposal_rejects = 0;
-        for (RerouteProposal& proposal : proposals) {
-            if (!proposal.proposed) {
-                continue;
+            const double proposal_ms_value = profile_ms(proposal_start, ProfileClock::now());
+            const auto commit_start = ProfileClock::now();
+            int proposal_success = 0;
+            int proposal_commits = 0;
+            int proposal_rejects = 0;
+            for (RerouteProposal& proposal : proposals) {
+                if (!proposal.proposed) {
+                    continue;
+                }
+                ++proposal_success;
+                if (commit_reroute_proposal(*proposal.two_pin, proposal.path, version)) {
+                    proposal.committed = true;
+                    ++proposal_commits;
+                } else {
+                    proposal.rejected = true;
+                    ++proposal_rejects;
+                }
             }
-            ++proposal_success;
-            if (commit_reroute_proposal(*proposal.two_pin, proposal.path, version)) {
-                proposal.committed = true;
-                ++proposal_commits;
-            } else {
-                proposal.rejected = true;
-                ++proposal_rejects;
+            const double commit_ms_value = profile_ms(commit_start, ProfileClock::now());
+
+            total_inputs += static_cast<int>(proposal_inputs.size());
+            total_selected += static_cast<int>(overflow_twopins.size());
+            total_conflict_skipped += conflict_skipped;
+            total_proposal_success += proposal_success;
+            total_proposal_commits += proposal_commits;
+            total_proposal_rejects += proposal_rejects;
+            total_proposal_ms += proposal_ms_value;
+            total_commit_ms += commit_ms_value;
+
+            if (do_log) {
+                log_sp->info("proposal reroute round={} hot_pool={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
+                        proposal_round, proposal_inputs.size(), overflow_twopins.size(), conflict_skipped,
+                        proposal_success, proposal_commits, proposal_rejects,
+                        static_cast<int>(overflow_twopins.size()) - proposal_success,
+                        conflict_aware ? 1 : 0, allow_maze ? 1 : 0,
+                        proposal_ms_value, commit_ms_value);
+            }
+            if (proposal_commits == 0) {
+                break;
             }
         }
-        const double commit_ms_value = profile_ms(commit_start, ProfileClock::now());
 
         if (do_profile) {
-            range_profile.proposal_ms += proposal_ms_value;
-            range_profile.proposal_commit_ms += commit_ms_value;
-            range_profile.proposal_inputs += static_cast<int>(overflow_twopins.size());
-            range_profile.proposal_success += proposal_success;
-            range_profile.proposal_commits += proposal_commits;
-            range_profile.proposal_commit_rejects += proposal_rejects;
-            range_profile.proposal_skipped += static_cast<int>(overflow_twopins.size()) - proposal_success;
+            range_profile.proposal_ms += total_proposal_ms;
+            range_profile.proposal_commit_ms += total_commit_ms;
+            range_profile.proposal_inputs += total_selected;
+            range_profile.proposal_success += total_proposal_success;
+            range_profile.proposal_commits += total_proposal_commits;
+            range_profile.proposal_commit_rejects += total_proposal_rejects;
+            range_profile.proposal_skipped += total_selected - total_proposal_success;
         }
         if (do_log) {
-            log_sp->info("proposal reroute phase candidates={} proposed={} committed={} rejected={} skipped={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
-                    overflow_twopins.size(), proposal_success, proposal_commits,
-                    proposal_rejects, static_cast<int>(overflow_twopins.size()) - proposal_success,
-                    allow_maze ? 1 : 0, proposal_ms_value, commit_ms_value);
+            log_sp->info("proposal reroute phase rounds={} hot_pool_scanned={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
+                    max_rounds, total_inputs, total_selected, total_conflict_skipped,
+                    total_proposal_success, total_proposal_commits, total_proposal_rejects,
+                    total_selected - total_proposal_success, conflict_aware ? 1 : 0,
+                    allow_maze ? 1 : 0, total_proposal_ms, total_commit_ms);
         }
         return;
     }
