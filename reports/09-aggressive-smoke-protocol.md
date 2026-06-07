@@ -2133,3 +2133,53 @@ V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT=128
 V8_STRICT_LEGAL_REPAIR=1
 V8_STRICT_LEGAL_REPAIR_POST_ONLY=1
 ```
+
+v8.19 post-only global commit smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_878c770_smoke_easyhard_postglobal96_v8_19_openmp14t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.19 | v8.18 + post-only global commit limit 4096, max tests 96 | `newblue2` | 106.182082 | 76.516170 | 0.721x | 1.157 | 0 / 0 | legal but slower |
+| v8.19 | same config | `adaptec4` | 392 gate | 130.666544 | 0.333x | NA | timeout | rejected |
+
+Evidence:
+
+```text
+adaptec4 post: global_tests=144, global_committed=0, commit_ms about 2966-3165 per phase
+adaptec4 router log still ended with 3D overflow = 5934 / 24 before evaluator hit timeout gate
+```
+
+Classification:
+
+- Post-only global commit is expensive and did not find valid global-improving
+  candidates on the hard plateau.
+- It should not be kept in the default v8 config.
+- The next useful test is not more global stats; it is to revisit
+  collision-aware candidate scheduling now that safe commit avoids the old
+  ripped-snapshot correctness bug.
+
+v8.20 safe oversubscribe scheduling probe:
+
+- expose `V8_PROPOSAL_LOW_OVERFLOW_LIMIT` and `V8_PROPOSAL_LOW_MAX_ROUNDS`;
+- expose `V8_LOW_OVERFLOW_EDGE_OVERSUBSCRIBE`;
+- keep `NTHU_PROPOSAL_REROUTE_SAFE_COMMIT=1`;
+- disable the v8.19 post-only global commit gate;
+- raise the low-overflow routing-state threshold to cover the `adaptec4`
+  3k-4k plateau and allow more candidates per overflow edge.
+
+Expected probe:
+
+```text
+V8_PROPOSAL_SAFE_COMMIT=1
+V8_PROPOSAL_LOW_OVERFLOW_LIMIT=4096
+V8_PROPOSAL_LOW_MAX_ROUNDS=6
+V8_LOW_OVERFLOW_EDGE_OVERSUBSCRIBE=1
+V8_PROPOSAL_EDGE_QUOTA=16
+V8_LOW_TAIL_POST_ONLY=1
+V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT=128
+V8_STRICT_LEGAL_REPAIR=1
+V8_STRICT_LEGAL_REPAIR_POST_ONLY=1
+```
