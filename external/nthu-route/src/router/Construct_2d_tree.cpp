@@ -75,6 +75,10 @@ int final_direct_overflow_limit() {
 int final_direct_overflow_rounds() {
     return std::max(0, env_int("NTHU_FINAL_DIRECT_OVERFLOW_REPAIR_ROUNDS", 0));
 }
+
+int v8_adaptive_low_tail_exit_limit() {
+    return std::max(0, env_int("NTHU_V8_ADAPTIVE_LOW_TAIL_EXIT_LIMIT", 0));
+}
 }
 
 namespace NTHUR {
@@ -940,6 +944,7 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
             log_sp->info("adaptive legal repair enabled: overflow={} trigger={} current_iter={} max_iter={}",
                     cur_overflow, trigger, current_iter, adaptive_max_iter);
             const int adaptive_direct_limit = adaptive_direct_overflow_limit();
+            const int low_tail_exit_limit = v8_adaptive_low_tail_exit_limit();
             route_2pinnets.reallocate_two_pin_list();
             mazeroute_in_range.clear_net_tree();
             congestion.used_cost_flag = HISTORY_COST;
@@ -982,6 +987,11 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
                 }
                 if (cur_overflow == 0) {
                     log_sp->info("Adaptive repair reached overflow = 0");
+                    break;
+                }
+                if (low_tail_exit_limit > 0 && cur_overflow <= low_tail_exit_limit) {
+                    log_sp->info("v8 adaptive low-tail exit: overflow={} limit={} iter={} max_iter={}",
+                            cur_overflow, low_tail_exit_limit, congestion.cur_iter, adaptive_max_iter);
                     break;
                 }
 
