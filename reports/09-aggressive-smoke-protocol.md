@@ -3534,3 +3534,68 @@ Classification:
   enter low-tail earlier and reduce global tail candidate volume. Move more of
   the final clearing work to self-ripup, which is better targeted for the
   remaining few overflow edges.
+
+v8.58 earlier low-tail with smaller global candidate volume:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_4a8e454_smoke_easyhard_earlytail2048_shiftself_v8_58_openmp14t
+commit=4a8e454
+code base=same router code as b7e2035; 4a8e454 is report-only
+NTHU_V8_STRICT_LEGAL_REPAIR_MAX_OVERFLOW=50000
+NTHU_V8_STRICT_ROLLBACK_NO_PROGRESS=1
+NTHU_V8_LOW_TAIL_POST_ONLY=1
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT=2048
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_MAX_CANDIDATES=1024
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_ROUNDS=8
+NTHU_V8_LOW_TAIL_SELF_RIPUP_MAX_TESTS=1024
+NTHU_V8_EMERGENCY_P2_MAX_ITER=40
+NTHU_ADAPTIVE_HIGH_OVERFLOW_P2_MAX_ITER=12
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.58 | `newblue2` | timeout at 230 | 76.516170 | <0.333x | NA | NA | reached internal 0 / 0 too late | rejected; timeout |
+| v8.58 | `adaptec4` | killed after easy timeout | 130.666544 | NA | NA | NA | NA | killed |
+
+Evidence:
+
+```text
+newblue2:
+  router reached total_overflow=0 at internal router time 224.499s
+  timeout wrapper killed the row at 230s before layer assignment/checker finished
+  summary.csv therefore reports timeout, not ok
+low-tail global:
+  round totals: 448 -> 307 -> 211 -> 146 -> 94 -> 62 -> 42 -> 36
+  phase proposal_ms=93003.628
+  phase commit_ms=9549.452
+self-ripup and final proposal:
+  self-ripup: 36 -> 1 in about 1.84s
+  final proposal: 1 -> 0
+process control:
+  easy timed out at 2026-06-07T20:57:14Z
+  hard process group was killed after easy failure
+```
+
+CPU utilization note:
+
+```text
+During the early/proposal-heavy region, sampled NthuRoute process CPU was only
+about 1.0x to 1.3x despite 14 OpenMP threads being present.
+The expensive low-tail global repair is dominated by candidate search and
+deterministic commit over a small tail set, so it does not use enough parallel
+work to compensate for its extra runtime.
+```
+
+Classification:
+
+- This is a configuration/phase-scheduling failure, not a useful speed
+  optimization. Lowering the high-overflow P2 limits made `newblue2` enter
+  post processing with too much residual overflow.
+- The low-tail global repair can eventually clear legality, but using 1024
+  candidates for eight rounds costs roughly 103 seconds on `newblue2` alone.
+- The useful observation is that self-ripup is cheap once overflow is small.
+  The next probe should keep v8.57's normal P2 budget, allow lightweight
+  low-tail before post only when total overflow is already small, reduce
+  global-tail candidates, and rely more on self-ripup for the final tail.
