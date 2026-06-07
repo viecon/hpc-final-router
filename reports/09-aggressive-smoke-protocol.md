@@ -2183,3 +2183,112 @@ V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT=128
 V8_STRICT_LEGAL_REPAIR=1
 V8_STRICT_LEGAL_REPAIR_POST_ONLY=1
 ```
+
+v8.20 safe oversubscribe smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_40115b0_smoke_easyhard_safeoversub_v8_20_openmp14t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.20 | safe commit + low-overflow oversubscribe + post-only tail/strict repair | `newblue2` | 93.422160 | 76.516170 | 0.819x | 1.156 | 0 / 0 | legal but slower |
+| v8.20 | same config | `adaptec4` | 332.651236 | 130.666544 | 0.393x | 1.111 | 3536 / 12 | rejected, hard case illegal |
+
+Evidence:
+
+```text
+newblue2: post low-tail self-ripup reached 5 overflow, strict legal repair cleared it to 0
+adaptec4: router time 326.844s, 3D overflow = 3536 / 12
+adaptec4 post: repeated 240-candidate proposal rounds committed 0 after overflow plateau
+```
+
+Classification:
+
+- Safe commit makes the previously unsafe oversubscribe idea viable on the easy
+  case, but not fast enough.
+- On `adaptec4`, the P2 emergency phase reduces overflow into the low thousands,
+  then post proposal reroute stalls because the post candidate cap is still only
+  240 and strict repair is gated at total overflow 128.
+- This is a coverage/gating failure, not a VM utilization failure: hard-case
+  `NthuRoute` used about 6x-8x CPU during the parallel proposal phases.
+
+v8.21 post candidate and strict-gate probe:
+
+- expose `V8_POST_OVERFLOW_LIMIT_AFTER_FIRST` and post stall controls through
+  the VM runners;
+- keep v8.20 routing logic unchanged;
+- raise post candidate cap from 240 to 1024;
+- raise strict legal repair max overflow from 128 to 4096 so the `adaptec4`
+  plateau can enter strict repair.
+
+Smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_061d5f7_smoke_easyhard_post1024_strict4096_v8_21_openmp14t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.21 | v8.20 + post cap 1024 + strict gate 4096 | `newblue2` | 75.727412 | 76.516170 | 1.010x | 1.156 | 0 / 0 | legal, slight speedup |
+| v8.21 | same config | `adaptec4` | 392 gate | 130.666544 | 0.333x | NA | timeout | rejected |
+
+Router-log evidence for the hard timeout:
+
+```text
+adaptec4: router time 336.279s, WL = 13566967, 3D overflow = 1910 / 10
+post strict repair: total_overflow 991 -> 955, then proposed=0 in later strict rounds
+summary row timed out because evaluator was killed by the 392s 3x gate
+```
+
+Classification:
+
+- Increasing post coverage is useful on `newblue2`; this is the first v8.20+
+  probe that is legal and slightly faster than original on the easy smoke row.
+- It is still not a valid config because `adaptec4` remains illegal on an
+  original-legal benchmark.
+- The failing segment is now narrower: strict repair can run on the hard
+  plateau, but its strict-capacity maze finds almost no legal proposals after
+  a small initial improvement.
+
+v8.22 same-net strict repair probe:
+
+- add `NTHU_V8_STRICT_REPAIR_ALLOW_SAME_NET`, default off;
+- when enabled, strict repair may reuse same-net edges with zero extra demand,
+  matching NTHU's `lookupNet` congestion semantics;
+- run the v8.21 config with `V8_STRICT_REPAIR_ALLOW_SAME_NET=1` and
+  `V8_STRICT_LEGAL_REPAIR_EDGE_QUOTA=4`.
+
+This is a controlled implementation test of the DSD-style "parallel search,
+exclusive commit" model: proposal search changes, but deterministic commit still
+checks capacity before updating global congestion.
+
+Smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_0966162_smoke_easyhard_samenet_quota4_v8_22_openmp14t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.22 | v8.21 + strict same-net reuse + strict edge quota 4 | `newblue2` | 81.687124 | 76.516170 | 0.937x | 1.156 | 0 / 0 | legal but slower |
+| v8.22 | same config | `adaptec4` | 392 gate | 130.666544 | 0.333x | NA | timeout | rejected |
+
+Router-log evidence for the hard timeout:
+
+```text
+adaptec4: router time 333.973s, WL = 13566164, 3D overflow = 3262 / 12
+post strict repair: total_overflow stayed around 1631; later strict rounds proposed=0
+summary row timed out because evaluator was killed by the 392s 3x gate
+```
+
+Classification:
+
+- Same-net reuse plus quota 4 did not fix the hard plateau and made the easy
+  smoke row slower than v8.21.
+- The issue is not simply "same-net reuse was forbidden"; the hard case appears
+  to require a different tail strategy, likely a bounded-length/global
+  negotiation repair that can move a group of conflicting nets instead of
+  committing isolated strict paths.
+- v8.21 remains the best result in this subseries for easy speed, but no
+  v8.20-v8.22 config passes the original-legal guard on the easy+hard smoke.
