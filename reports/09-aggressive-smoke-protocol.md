@@ -1812,6 +1812,44 @@ algorithm result.  The guard/smoke helpers were updated so
 `V8_FINAL_FULL_REMAINDER_REPAIR_LIMIT` now controls the v8 strategy's
 `NTHU_FINAL_FULL_REMAINDER_REPAIR_LIMIT`.
 
+Corrected final-full probe:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_bc04a43_bigblue1_finalfull50k12_14t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.12 probe B | final full-remainder limit 50k, 12 rounds | `bigblue1` | 417.556938 | 1206.306768 | 2.889x | 1.253 | 30678 / 6 | rejected, still illegal |
+
+Key evidence:
+
+```text
+final full-remainder repair enabled: overflow=18451 trigger=0 limit=50000 rounds=12
+Final full-remainder repair P2 round: 12 iter=60
+cal max overflow= 9 cur_cap-max_cap= 17770
+Lab2 checker total_overflow=30678 max_overflow=6
+```
+
+Classification:
+
+- The support-script bug is fixed; the 50k final-full gate really ran.
+- Extra full-remainder P2 rounds did not create legality.  The 2D residual
+  dropped only from 18451 to 17770 during the 12 explicit full-remainder rounds,
+  then post-processing reached 15339 before layer assignment still produced
+  30678 checker overflow.
+- This rejects "just run more NTHU full tail" as the next default.
+
+v8.13 strict-tail design:
+
+- add opt-in `NTHU_V8_LOW_TAIL_STRICT_CAPACITY`;
+- only affects v8 low-tail self-ripup;
+- after removing the old path, commit a proposed path only if it can be
+  inserted with `check_path_no_overflow(..., true)`;
+- keep proposal generation parallel and commit order deterministic;
+- use this as a targeted `bigblue1` probe with the same routing-state tail
+  trigger, not a benchmark-name branch.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:

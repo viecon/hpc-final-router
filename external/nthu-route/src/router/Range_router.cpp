@@ -299,6 +299,14 @@ int v8_low_tail_self_ripup_max_tests() {
     return std::max(1, std::atoi(value));
 }
 
+bool v8_low_tail_strict_capacity_enabled() {
+    const char* value = std::getenv("NTHU_V8_LOW_TAIL_STRICT_CAPACITY");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
 int proposal_reroute_overflow_edge_quota() {
     const char* value = std::getenv("NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA");
     if (value == nullptr || *value == '\0') {
@@ -2315,6 +2323,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 if (v8_low_tail_self_ripup_enabled() && tail_stats.total_overflow > 0) {
                     const int self_ripup_box_inc = v8_low_tail_self_ripup_box_inc();
                     const int self_ripup_max_tests = v8_low_tail_self_ripup_max_tests();
+                    const bool strict_capacity_tail = v8_low_tail_strict_capacity_enabled();
                     int self_total_inputs = 0;
                     int self_total_proposed = 0;
                     int self_total_committed = 0;
@@ -2376,14 +2385,30 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
 
                             if (proposed && proposed_path.size() >= 2) {
                                 ++self_proposed;
-                                two_pin.path = proposed_path;
-                                two_pin.pin1 = two_pin.path.front();
-                                two_pin.pin2 = two_pin.path.back();
-                                congestion.update_congestion_map_insert_two_pin_net(two_pin);
-                                const OverflowStats new_stats = current_overflow_stats(congestion);
-                                const bool accept = new_stats.total_overflow < old_stats.total_overflow &&
-                                        new_stats.max_overflow <= old_stats.max_overflow;
+                                OverflowStats new_stats = old_stats;
+                                bool inserted_proposal = false;
+                                bool accept = false;
+                                if (strict_capacity_tail) {
+                                    accept = congestion.check_path_no_overflow(
+                                            proposed_path, two_pin.net_id, true);
+                                } else {
+                                    two_pin.path = proposed_path;
+                                    two_pin.pin1 = two_pin.path.front();
+                                    two_pin.pin2 = two_pin.path.back();
+                                    congestion.update_congestion_map_insert_two_pin_net(two_pin);
+                                    inserted_proposal = true;
+                                    new_stats = current_overflow_stats(congestion);
+                                    accept = new_stats.total_overflow < old_stats.total_overflow &&
+                                            new_stats.max_overflow <= old_stats.max_overflow;
+                                }
                                 if (accept) {
+                                    if (strict_capacity_tail) {
+                                        two_pin.path = proposed_path;
+                                        two_pin.pin1 = two_pin.path.front();
+                                        two_pin.pin2 = two_pin.path.back();
+                                        congestion.update_congestion_map_insert_two_pin_net(two_pin);
+                                        new_stats = current_overflow_stats(congestion);
+                                    }
                                     if (version == 2) {
                                         two_pin.done = construct_2d_tree.done_iter;
                                     }
@@ -2396,7 +2421,9 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                                     continue;
                                 }
 
-                                congestion.update_congestion_map_remove_two_pin_net(proposed_path, two_pin.net_id);
+                                if (inserted_proposal) {
+                                    congestion.update_congestion_map_remove_two_pin_net(proposed_path, two_pin.net_id);
+                                }
                                 ++self_rejected;
                             }
 
@@ -2413,20 +2440,20 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                         self_total_rejected += self_rejected;
                         self_total_ms += self_ms;
                         if (do_log) {
-                            log_sp->info("v8 low-tail self-ripup round={} inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box_inc={} elapsed_ms={:.3f}",
+                            log_sp->info("v8 low-tail self-ripup round={} inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box_inc={} strict_capacity={} elapsed_ms={:.3f}",
                                     self_round, self_inputs.size(), self_proposed, self_committed,
                                     self_rejected, tail_stats.total_overflow, tail_stats.max_overflow,
-                                    self_ripup_box_inc, self_ms);
+                                    self_ripup_box_inc, strict_capacity_tail ? 1 : 0, self_ms);
                         }
                         if (self_committed == 0) {
                             break;
                         }
                     }
                     if (do_log) {
-                        log_sp->info("v8 low-tail self-ripup phase inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box_inc={} elapsed_ms={:.3f}",
+                        log_sp->info("v8 low-tail self-ripup phase inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box_inc={} strict_capacity={} elapsed_ms={:.3f}",
                                 self_total_inputs, self_total_proposed, self_total_committed,
                                 self_total_rejected, tail_stats.total_overflow, tail_stats.max_overflow,
-                                self_ripup_box_inc, self_total_ms);
+                                self_ripup_box_inc, strict_capacity_tail ? 1 : 0, self_total_ms);
                     }
                 }
             }
