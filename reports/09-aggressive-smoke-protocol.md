@@ -2449,3 +2449,53 @@ Classification:
 - The next config should lower the threshold to `512`, which avoids the heavy
   `newblue2` gate at overflow 903 but still allows the `adaptec4` plateau near
   407 to enter snapshot/burst/global-gate repair.
+
+v8.37 smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_df7d534_smoke_easyhard_burst64max1_snapshot512_quota16_v8_37_openmp14t
+```
+
+Config:
+
+```text
+snapshot_commit_max=512
+snapshot_global_gate=1
+snapshot_burst_total=64
+snapshot_burst_max=1
+proposal_edge_quota=16
+OpenMP threads=14
+```
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.37 | `newblue2` | 178.253408 | 76.516170 | 0.429x | 8778695 | 1.156x | 0 / 0 | legal but too slow |
+| v8.37 | `adaptec4` | 392 gate | 130.666544 | 0.333x | router log around 9006132 2D before layer | NA | timeout; tail around 500 / 5 | rejected |
+
+Evidence:
+
+```text
+newblue2: legal, but slower than v8.35 because global gate still activates after overflow drops below 512.
+adaptec4: threshold 512 activates only near the smoke timeout tail; then global-gated strict repair commits about one route per phase and stalls around total_overflow 500 / max 5.
+adaptec4 utilization: proposal-heavy phases still used roughly 8-10 CPU cores, but the deterministic commit/gate is the serial bottleneck.
+```
+
+Classification:
+
+- The threshold tuning result is negative.
+- `snapshot_commit_max=512` avoids the v8.36 easy timeout, but it is still too
+  slow on `newblue2` and too late/weak on `adaptec4`.
+- The failing segment is now clear: when full snapshot commit is too unsafe,
+  the fallback global gate accepts only immediately improving proposals.  That
+  is safer than v8.31 no-rollback, but it cannot perform the bounded soft
+  capacity group movement described by SPRoute-style negotiation.
+
+v8.38 planned code probe:
+
+- keep the same NTHU-style routing phases and deterministic order;
+- in the global-gate fallback, allow a proposal that does not immediately
+  improve `total_overflow` if the whole committed state remains inside the same
+  bounded envelope: `round_start_total + snapshot_burst_total` and
+  `round_start_max + snapshot_burst_max`;
+- disable that envelope on the last strict-repair round so the final state is
+  not deliberately worsened without another repair opportunity.
