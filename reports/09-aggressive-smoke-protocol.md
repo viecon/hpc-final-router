@@ -3666,3 +3666,263 @@ Classification:
   oversubscribing the 16-core VM with two 14-thread routers, that probe should
   run the easy and hard smoke rows sequentially inside one run directory while
   each router is allowed to use 14 OpenMP threads.
+
+v8.60 actual proposal-parallel rollback probe:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_ee01b42_smoke_easyhard_v857_proposalparallel_v8_60_openmp14t
+commit=ee01b42
+code base=same router code as b7e2035; ee01b42 is report-only
+runner=sequential easy+hard inside one run directory
+ROUTER_OPENMP=ON
+ROUTER_THREADS=14
+PARALLEL_BENCH_JOBS=1
+OMP_PROC_BIND=close
+OMP_PLACES=cores
+V8_PROPOSAL_PARALLEL=1
+V8_TRANSACTIONAL_PROPOSAL_WAVES=1
+V8_TRANSACTIONAL_PROPOSAL_WAVE_SIZE=256
+V8_TRANSACTIONAL_PROPOSAL_GLOBAL_GATE=1
+V8_TRANSACTIONAL_PROPOSAL_REQUIRE_PROGRESS=1
+V8_STRICT_LEGAL_REPAIR_MAX_OVERFLOW=50000
+V8_STRICT_LEGAL_REPAIR_MAX_CANDIDATES=4096
+V8_STRICT_LEGAL_REPAIR_BATCH_SIZE=512
+V8_STRICT_LEGAL_REPAIR_EDGE_QUOTA=8
+V8_STRICT_LEGAL_REPAIR_DYNAMIC_EDGE_QUOTA=1
+V8_STRICT_REPAIR_ALLOW_SAME_NET=1
+V8_STRICT_ROLLBACK_NO_PROGRESS=1
+V8_STRICT_SNAPSHOT_GLOBAL_GATE=1
+V8_STRICT_SNAPSHOT_BURST_TOTAL=64
+V8_STRICT_SNAPSHOT_BURST_MAX=1
+V8_LOW_TAIL_POST_ONLY=1
+V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT=1024
+V8_LOW_TAIL_GLOBAL_REPAIR_MAX_CANDIDATES=2048
+V8_LOW_TAIL_GLOBAL_REPAIR_ROUNDS=12
+V8_LOW_TAIL_SELF_RIPUP_MAX_TESTS=512
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.60 | `newblue2` | 73.507061 | 76.516170 | 1.041x | 8817946 | 1.161x | 0 / 0 | legal and slightly faster |
+| v8.60 | `adaptec4` | timeout at 392 | 130.666544 | <0.333x | NA | NA | about 544 / 8 before timeout | rejected; timeout |
+
+Evidence:
+
+```text
+newblue2:
+  NthuRoute internal time: 9.63789 70.2443
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 4703713 + 4114233 = 8817946
+adaptec4:
+  strict repair reached the low tail around total_overflow=659, max_overflow=8
+  low-tail global repair reduced about 659 -> 544 near timeout
+  low-tail phase proposal_ms=10109.468, commit_ms=39172.457
+CPU utilization:
+  easy startup/proposal samples reached about 2.8x CPU
+  hard repair samples reached about 5.0x to 7.2x CPU with 14 threads present
+```
+
+Classification:
+
+- This run confirms that the previous missing-utilization finding was real:
+  setting `V8_PROPOSAL_PARALLEL=1` exercises the OpenMP proposal path.
+- It does not fix the hard tail. The deterministic commit and rollback/global
+  gates still dominate once the overflow is small, so the hard row times out.
+- The useful result is diagnostic rather than final: proposal parallelism is
+  active, but the v8.57 rollback policy is too conservative for hard cases.
+
+v8.61 actual proposal-parallel lateral snapshot probe:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_ee01b42_smoke_easyhard_v856_lateral_proposalparallel_v8_61_openmp14t
+commit=ee01b42
+code base=same router code as b7e2035; ee01b42 is report-only
+runner=sequential easy+hard inside one run directory
+ROUTER_OPENMP=ON
+ROUTER_THREADS=14
+PARALLEL_BENCH_JOBS=1
+OMP_PROC_BIND=close
+OMP_PLACES=cores
+V8_PROPOSAL_PARALLEL=1
+V8_TRANSACTIONAL_PROPOSAL_WAVES=1
+V8_TRANSACTIONAL_PROPOSAL_WAVE_SIZE=256
+V8_TRANSACTIONAL_PROPOSAL_GLOBAL_GATE=1
+V8_TRANSACTIONAL_PROPOSAL_REQUIRE_PROGRESS unset
+V8_STRICT_LEGAL_REPAIR_MAX_OVERFLOW=50000
+V8_STRICT_LEGAL_REPAIR_MAX_CANDIDATES=8192
+V8_STRICT_LEGAL_REPAIR_BATCH_SIZE=1024
+V8_STRICT_LEGAL_REPAIR_EDGE_QUOTA=12
+V8_STRICT_LEGAL_REPAIR_DYNAMIC_EDGE_QUOTA=1
+V8_STRICT_REPAIR_ALLOW_SAME_NET=1
+V8_STRICT_ROLLBACK_NO_PROGRESS=0
+V8_STRICT_SNAPSHOT_GLOBAL_GATE=1
+V8_STRICT_SNAPSHOT_BURST_TOTAL=512
+V8_STRICT_SNAPSHOT_BURST_MAX=4
+V8_LOW_TAIL_POST_ONLY=1
+V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT=1024
+V8_LOW_TAIL_GLOBAL_REPAIR_MAX_CANDIDATES=2048
+V8_LOW_TAIL_GLOBAL_REPAIR_ROUNDS=12
+V8_LOW_TAIL_SELF_RIPUP_MAX_TESTS=512
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.61 | `newblue2` | 89.850106 | 76.516170 | 0.852x | 8800464 | 1.159x | 0 / 0 | legal but slow |
+| v8.61 | `adaptec4` | 317.605231 | 130.666544 | 0.411x | 13573057 | 1.112x | 0 / 0 | legal but slow |
+
+Evidence:
+
+```text
+newblue2:
+  legal, but slower than original.
+adaptec4:
+  NthuRoute internal time: 16.0279 311.903
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 9002292 + 4570765 = 13573057
+  strict repair reduced a high-overflow phase around 32935 -> 10805
+  later tail phases eventually cleared to 0
+CPU utilization:
+  sampled process CPU was about 7.6x on easy and 6.4x on hard.
+direct route_all:
+  hard early/adaptive direct route_all total_ms examples:
+  20480.708, 23766.698, 16981.200
+```
+
+Classification:
+
+- This preserves legality on both smoke rows and shows that the lateral
+  snapshot/no-rollback family can clear the original-legal hard case.
+- It is not a performance winner. Proposal parallelism improves utilization,
+  but very large direct/emergency candidate batches dominate runtime.
+- The next probe should keep this legal convergence behavior and reduce the
+  direct/emergency route-all candidate volume.
+
+v8.62 direct/emergency candidate limit 8192:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_ee01b42_smoke_easyhard_v856_lateral_parallel_direct8192_v8_62_openmp14t
+commit=ee01b42
+code base=same router code as b7e2035; ee01b42 is report-only
+runner=sequential easy+hard inside one run directory
+base config=v8.61
+V8_DIRECT_ROUTE_ALL_LIMIT=8192
+V8_EMERGENCY_DIRECT_LIMIT=8192
+V8_EMERGENCY_PROPOSAL_MAX_CANDIDATES=16384
+V8_EMERGENCY_PROPOSAL_BATCH_SIZE=4096
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.62 | `newblue2` | 85.116587 | 76.516170 | 0.899x | 8813233 | 1.160x | 0 / 0 | legal but slow |
+| v8.62 | `adaptec4` | 268.079607 | 130.666544 | 0.487x | 13583120 | 1.113x | 0 / 0 | legal but slow; best current v8 smoke |
+
+Evidence:
+
+```text
+newblue2:
+  NthuRoute internal time: 9.76322 81.7709
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 4690775 + 4122458 = 8813233
+adaptec4:
+  NthuRoute internal time: 15.6287 262.281
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 9007446 + 4575674 = 13583120
+  low-tail global reduced 431 -> 91 -> 76
+  self-ripup cleared 76 -> 0
+direct route_all:
+  hard early/adaptive total_ms examples dropped to about 4.7s and 4.0s,
+  then later to about 0.9s to 1.6s.
+CPU utilization:
+  hard repair/proposal samples reached about 7.0x CPU.
+aggregate:
+  legal=2/2
+  candidate_seconds=353.196194
+  original_seconds=207.182714
+  suite_speedup=0.587x
+```
+
+Classification:
+
+- This is the best current v8 legal smoke configuration after actual proposal
+  parallelism was enabled.
+- The direct/emergency candidate limit directly fixes the measured
+  `route_all` pitfall from v8.61 while preserving legality on both
+  original-legal smoke rows.
+- It is still slower than original. Remaining cost is concentrated in
+  deterministic commit, repeated hard-tail proposal/commit rounds, and the
+  high-WL detours introduced by aggressive strict repair.
+
+v8.63 direct/emergency candidate limit 4096:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_ee01b42_smoke_easyhard_v856_lateral_parallel_direct4096_v8_63_openmp14t
+commit=ee01b42
+code base=same router code as b7e2035; ee01b42 is report-only
+runner=sequential easy+hard inside one run directory
+base config=v8.62
+V8_DIRECT_ROUTE_ALL_LIMIT=4096
+V8_EMERGENCY_DIRECT_LIMIT=4096
+V8_EMERGENCY_PROPOSAL_MAX_CANDIDATES=8192
+V8_EMERGENCY_PROPOSAL_BATCH_SIZE=2048
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.63 | `newblue2` | 88.310933 | 76.516170 | 0.867x | 8824075 | 1.162x | 0 / 0 | legal but slow |
+| v8.63 | `adaptec4` | 200.056098 | 130.666544 | 0.653x | 13593744 | 1.114x | 59508 / 24 | rejected; illegal |
+
+Evidence:
+
+```text
+newblue2:
+  still legal, but slower than v8.62 and original.
+adaptec4:
+  wrapper status is ok only because checker ran; legality failed.
+  3D # of overflow = 59508
+  3D max overflow = 24
+  3D overflow edge number = 19102
+  total wire length = 9028712 + 4565032 = 13593744
+  NthuRoute internal time: 15.3803 194.351
+  post/strict phases were stuck around 2D total_overflow=29754, max_overflow=35
+  strict legal repair proposed 0 despite a large box.
+```
+
+Classification:
+
+- This run is rejected because it is illegal on an original-legal hard smoke
+  row.
+- The 4096 direct/emergency limit is too small. It cuts candidate coverage
+  enough that the router enters post processing with a very large residual
+  overflow, and the fixed post-overflow candidate cap cannot recover it.
+- The useful boundary result is that 8192 is the current lower safe smoke
+  candidate limit, while 4096 is below the legality threshold for `adaptec4`.
+
+Current v8.60-v8.63 decision:
+
+```text
+Best legal smoke config: v8.62
+Rejected configs:
+  v8.60: hard timeout
+  v8.61: legal but slower than v8.62
+  v8.63: hard illegal
+Main pitfall fixed in this batch:
+  V8_PROPOSAL_PARALLEL was previously not enabled by the runner environment.
+Main pitfall still open:
+  deterministic commit and hard-tail clearing dominate after candidate search
+  is parallelized; lowering candidate volume too far loses legality.
+Next safe optimization direction:
+  keep v8.62's 8192 direct/emergency coverage, then tune routing-state-based
+  post/tail work limits instead of lowering all direct candidates globally.
+```
