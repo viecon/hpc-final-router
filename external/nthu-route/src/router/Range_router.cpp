@@ -16,6 +16,7 @@
 #include <limits>
 #include <queue>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -212,6 +213,10 @@ bool proposal_reroute_log_enabled() {
 
 bool proposal_reroute_conflict_aware_enabled() {
     return std::getenv("NTHU_PROPOSAL_REROUTE_CONFLICT_AWARE") != nullptr;
+}
+
+bool proposal_reroute_overflow_edge_conflict_enabled() {
+    return std::getenv("NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_CONFLICT") != nullptr;
 }
 
 int proposal_reroute_max_candidates() {
@@ -645,6 +650,31 @@ struct RerouteCandidateBox {
 bool boxes_overlap(const NTHUR::Rectangle& a, const NTHUR::Rectangle& b) {
     return !(a.downRight.x < b.upLeft.x || b.downRight.x < a.upLeft.x ||
             a.downRight.y < b.upLeft.y || b.downRight.y < a.upLeft.y);
+}
+
+std::uint64_t route_edge_key(const NTHUR::Coordinate_2d& c1, const NTHUR::Coordinate_2d& c2) {
+    NTHUR::Coordinate_2d low = c1;
+    NTHUR::Coordinate_2d high = c2;
+    if (std::tie(high.x, high.y) < std::tie(low.x, low.y)) {
+        std::swap(low, high);
+    }
+    const std::uint64_t orientation = low.x == high.x ? 1ULL : 0ULL;
+    return (static_cast<std::uint64_t>(low.x) << 33) ^
+            (static_cast<std::uint64_t>(low.y) << 1) ^ orientation;
+}
+
+void collect_overflow_route_edge_keys(const NTHUR::Two_pin_element_2d& two_pin,
+        const NTHUR::Congestion& congestion,
+        std::vector<std::uint64_t>& keys) {
+    keys.clear();
+    for (int path_index = static_cast<int>(two_pin.path.size()) - 2; path_index >= 0; --path_index) {
+        const NTHUR::Coordinate_2d& from = two_pin.path[path_index];
+        const NTHUR::Coordinate_2d& to = two_pin.path[path_index + 1];
+        const NTHUR::Edge_2d& edge = congestion.congestionMap2d.edge(from, to);
+        if (edge.isOverflow()) {
+            keys.push_back(route_edge_key(from, to));
+        }
+    }
 }
 
 void include_point_in_box(NTHUR::Rectangle& box, const NTHUR::Coordinate_2d& point) {
@@ -1633,6 +1663,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         const int max_candidates = proposal_reroute_max_candidates();
         const int batch_size = proposal_reroute_batch_size();
         const int max_rounds = proposal_reroute_max_rounds();
+        const bool overflow_edge_conflict = conflict_aware && proposal_reroute_overflow_edge_conflict_enabled();
 
         int total_inputs = 0;
         int total_selected = 0;
@@ -1671,31 +1702,61 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             overflow_twopins.reserve(std::min(batch_size, static_cast<int>(proposal_inputs.size())));
             int conflict_skipped = 0;
             if (conflict_aware) {
-                std::vector<Rectangle> selected_boxes;
-                selected_boxes.reserve(std::min(batch_size, static_cast<int>(proposal_inputs.size())));
                 std::unordered_set<int> selected_net_ids;
                 selected_net_ids.reserve(std::min(batch_size, static_cast<int>(proposal_inputs.size())));
-                for (const ProposalInput& input : proposal_inputs) {
-                    if (static_cast<int>(overflow_twopins.size()) >= batch_size) {
-                        break;
-                    }
-                    bool conflict = selected_net_ids.find(input.two_pin->net_id) != selected_net_ids.end();
-                    const Rectangle box = reroute_conflict_box(*input.two_pin, construct_2d_tree, nullptr);
-                    if (!conflict) {
-                        for (const Rectangle& selected_box : selected_boxes) {
-                            if (boxes_overlap(box, selected_box)) {
-                                conflict = true;
-                                break;
+                if (overflow_edge_conflict) {
+                    std::unordered_set<std::uint64_t> selected_overflow_edges;
+                    selected_overflow_edges.reserve(std::min(batch_size * 4, static_cast<int>(proposal_inputs.size()) * 2));
+                    std::vector<std::uint64_t> overflow_edge_keys;
+                    for (const ProposalInput& input : proposal_inputs) {
+                        if (static_cast<int>(overflow_twopins.size()) >= batch_size) {
+                            break;
+                        }
+                        bool conflict = selected_net_ids.find(input.two_pin->net_id) != selected_net_ids.end();
+                        collect_overflow_route_edge_keys(*input.two_pin, congestion, overflow_edge_keys);
+                        if (!conflict) {
+                            for (std::uint64_t edge_key : overflow_edge_keys) {
+                                if (selected_overflow_edges.find(edge_key) != selected_overflow_edges.end()) {
+                                    conflict = true;
+                                    break;
+                                }
                             }
                         }
+                        if (conflict) {
+                            ++conflict_skipped;
+                            continue;
+                        }
+                        selected_net_ids.insert(input.two_pin->net_id);
+                        for (std::uint64_t edge_key : overflow_edge_keys) {
+                            selected_overflow_edges.insert(edge_key);
+                        }
+                        overflow_twopins.push_back(input.two_pin);
                     }
-                    if (conflict) {
-                        ++conflict_skipped;
-                        continue;
+                } else {
+                    std::vector<Rectangle> selected_boxes;
+                    selected_boxes.reserve(std::min(batch_size, static_cast<int>(proposal_inputs.size())));
+                    for (const ProposalInput& input : proposal_inputs) {
+                        if (static_cast<int>(overflow_twopins.size()) >= batch_size) {
+                            break;
+                        }
+                        bool conflict = selected_net_ids.find(input.two_pin->net_id) != selected_net_ids.end();
+                        const Rectangle box = reroute_conflict_box(*input.two_pin, construct_2d_tree, nullptr);
+                        if (!conflict) {
+                            for (const Rectangle& selected_box : selected_boxes) {
+                                if (boxes_overlap(box, selected_box)) {
+                                    conflict = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (conflict) {
+                            ++conflict_skipped;
+                            continue;
+                        }
+                        selected_net_ids.insert(input.two_pin->net_id);
+                        selected_boxes.push_back(box);
+                        overflow_twopins.push_back(input.two_pin);
                     }
-                    selected_net_ids.insert(input.two_pin->net_id);
-                    selected_boxes.push_back(box);
-                    overflow_twopins.push_back(input.two_pin);
                 }
             } else {
                 const int selected_count = std::min(batch_size, static_cast<int>(proposal_inputs.size()));
@@ -1765,11 +1826,11 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             total_commit_ms += commit_ms_value;
 
             if (do_log) {
-                log_sp->info("proposal reroute round={} hot_pool={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
+                log_sp->info("proposal reroute round={} hot_pool={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} edge_conflict={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
                         proposal_round, proposal_inputs.size(), overflow_twopins.size(), conflict_skipped,
                         proposal_success, proposal_commits, proposal_rejects,
                         static_cast<int>(overflow_twopins.size()) - proposal_success,
-                        conflict_aware ? 1 : 0, allow_maze ? 1 : 0,
+                        conflict_aware ? 1 : 0, overflow_edge_conflict ? 1 : 0, allow_maze ? 1 : 0,
                         proposal_ms_value, commit_ms_value);
             }
             if (proposal_commits == 0) {
@@ -1787,11 +1848,11 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             range_profile.proposal_skipped += total_selected - total_proposal_success;
         }
         if (do_log) {
-            log_sp->info("proposal reroute phase rounds={} hot_pool_scanned={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("proposal reroute phase rounds={} hot_pool_scanned={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} edge_conflict={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
                     max_rounds, total_inputs, total_selected, total_conflict_skipped,
                     total_proposal_success, total_proposal_commits, total_proposal_rejects,
                     total_selected - total_proposal_success, conflict_aware ? 1 : 0,
-                    allow_maze ? 1 : 0, total_proposal_ms, total_commit_ms);
+                    overflow_edge_conflict ? 1 : 0, allow_maze ? 1 : 0, total_proposal_ms, total_commit_ms);
         }
         return;
     }

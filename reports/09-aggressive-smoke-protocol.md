@@ -720,15 +720,58 @@ Classification:
   easy smoke row inside the 3x gate.
 - Do not run `legal7` for v7.1.  Keep v4/v5a as the legal baseline.
 
-v7.2 fix under test:
+v7.2 smoke result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_e2730c4_smoke_004
+```
+
+Run control:
+
+- launched via background `setsid -f` from the VM;
+- `launcher.pid=2578970`, `launcher.pgid=2578970`;
+- `newblue2` completed in `49.592691s` but failed legality;
+- because the easy row already failed smoke, the remaining hard row was stopped
+  manually by killing process groups `2579109` and `2578970`;
+- no active v7 process remained after kill.
+
+Observed `newblue2` output:
+
+| Metric | Value |
+| --- | ---: |
+| total_wirelength | 8799859 |
+| total_overflow | 152222 |
+| max_overflow | 60 |
+| overflowed_nets | 78940 |
+| overflowed_edges | 23320 |
+
+Key proposal diagnostic:
+
+```text
+proposal reroute round=1 hot_pool=16384 selected=4 conflict_skipped=16380
+proposal reroute round=2 hot_pool=240 selected=1 conflict_skipped=239
+proposal reroute round=3 hot_pool=240 selected=1 conflict_skipped=239
+```
+
+Classification:
+
+- v7.2 fixed the v7.1 timeout symptom, but the conservative bounding-box
+  conflict graph over-serialized the proposal phase.
+- The easy row finished quickly only because almost no proposal work was
+  allowed through; legality regressed badly.
+- This is an implementation/support issue in the conflict model, not yet enough
+  evidence to reject proposal-only reroute as an optimization direction.
+- Do not run `legal7` for v7.2.
+
+v7.3 fix under test:
 
 - keep proposal-only semantics: no serial `range_router()` fallback inside the
   v7 path;
 - split each route phase into multiple transaction rounds:
   1. recompute current overflow score;
   2. sort the hot pool by overflow score;
-  3. select a deterministic independent set using conservative conflict boxes
-     and unique net ids;
+  3. select a deterministic independent set using unique net ids plus the
+     currently overflowed old-path edge ids;
   4. generate proposals in parallel;
   5. commit proposals in deterministic order;
   6. stop when no proposal commits or `NTHU_PROPOSAL_REROUTE_MAX_ROUNDS` is
@@ -740,15 +783,16 @@ NTHU_PROPOSAL_REROUTE_MAX_CANDIDATES=16384
 NTHU_PROPOSAL_REROUTE_BATCH_SIZE=4096
 NTHU_PROPOSAL_REROUTE_MAX_ROUNDS=6
 NTHU_PROPOSAL_REROUTE_CONFLICT_AWARE=1
+NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_CONFLICT=1
 ```
 
 Expected diagnostic:
 
 - if commit rejection drops and overflow decreases per round, the issue was the
-  missing conflict graph;
+  missing useful conflict graph;
 - if proposal time or overflow still fails the smoke gate, the current
-  conflict-box model is too conservative or the proposal engine needs a true
-  soft-capacity/negotiation layer before legal7 expansion.
+  proposal engine needs a true soft-capacity/negotiation layer before legal7
+  expansion.
 
 ## Guard Expansion: original-legal legal7
 
