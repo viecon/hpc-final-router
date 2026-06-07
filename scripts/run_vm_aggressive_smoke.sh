@@ -16,6 +16,7 @@ PARALLEL_BENCH_JOBS=${PARALLEL_BENCH_JOBS:-1}
 ROUTER_THREADS=${ROUTER_THREADS:-1}
 ROUTER_OPENMP=${ROUTER_OPENMP:-OFF}
 ROUTER_CUDA=${ROUTER_CUDA:-OFF}
+SMOKE_ROLES=${SMOKE_ROLES:-"easy hard"}
 RUN_STRATEGIES=${RUN_STRATEGIES:-prev_final aggressive_p3lite_v1 aggressive_p3lite_v2_postonly frontier_edgecount_shortp3_v1 frontier_edgecount_netguided_v2 frontier_netguided_adaptive_repair_v3 frontier_adaptive_late_score1_v4}
 
 COMMON_ARGS=${COMMON_ARGS:-"--p2-init-box-size=5 --p2-box-expand-size=5 --p2-max-iteration=6 --overflow-threshold=1800 --p3-max-iteration=24 --p3-init-box-size=80 --p3-box-expand-size=140"}
@@ -59,6 +60,7 @@ CSV
   echo "router_threads=$ROUTER_THREADS"
   echo "router_openmp=$ROUTER_OPENMP"
   echo "router_cuda=$ROUTER_CUDA"
+  echo "smoke_roles=$SMOKE_ROLES"
   echo
   echo "== host =="
   hostname || true
@@ -82,6 +84,11 @@ strategy_enabled() {
   [[ " $RUN_STRATEGIES " == *" $strategy "* ]]
 }
 
+role_enabled() {
+  local role=$1
+  [[ " $SMOKE_ROLES " == *" $role "* ]]
+}
+
 run_one() {
   local strategy=$1
   local role=$2
@@ -89,6 +96,9 @@ run_one() {
   local timeout_seconds=$4
   local strategy_args=$5
   shift 5
+  if ! role_enabled "$role"; then
+    return 0
+  fi
   local result_dir="$RESULT_ROOT/$strategy/$bench"
   local bench_list="$result_dir/bench.list"
   mkdir -p "$result_dir"
@@ -437,6 +447,7 @@ if strategy_enabled frontier_proposal_reroute_v7; then
     NTHU_PROPOSAL_REROUTE_MAX_ROUNDS=6
     NTHU_PROPOSAL_REROUTE_CONFLICT_AWARE=1
     NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_CONFLICT=1
+    NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA=8
   )
   run_one frontier_proposal_reroute_v7 easy newblue2.fastplace90.3d.50.20.100 230 "$frontier_args" "${common_candidate[@]}"
   run_one frontier_proposal_reroute_v7 hard adaptec4.aplace60.3d.30.50.90 392 "$frontier_args" "${common_candidate[@]}"

@@ -763,15 +763,61 @@ Classification:
   evidence to reject proposal-only reroute as an optimization direction.
 - Do not run `legal7` for v7.2.
 
-v7.3 fix under test:
+v7.3 smoke result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_ae05cb2_smoke_005
+```
+
+Run control:
+
+- launched via background `setsid -f` from the VM;
+- `launcher.pid=2579436`, `launcher.pgid=2579436`;
+- `newblue2` completed in `61.800743s` but failed legality;
+- because the easy row already failed smoke, the remaining hard row was stopped
+  manually by killing process groups `2579639` and `2579436`;
+- no active v7 process remained after kill.
+
+Observed `newblue2` output:
+
+| Metric | Value |
+| --- | ---: |
+| seconds | 61.800743 |
+| total_wirelength | 8796689 |
+| total_overflow | 148610 |
+| max_overflow | 60 |
+| overflowed_nets | 78072 |
+| overflowed_edges | 22797 |
+
+Key proposal diagnostic:
+
+```text
+proposal reroute phase rounds=6 hot_pool_scanned=98304 selected=1509
+conflict_skipped=96795 proposed=676 committed=94 rejected=582 edge_conflict=1
+proposal reroute phase rounds=6 hot_pool_scanned=240 selected=22
+conflict_skipped=218 proposed=0 committed=0 rejected=0 edge_conflict=1
+```
+
+Classification:
+
+- v7.3 improved v7.2's box-conflict bug, but it still incorrectly treated a
+  shared old overflow edge as an exclusive resource.
+- That is too conservative: moving multiple nets off the same overused edge is
+  required when `max_overflow` is high.
+- The safety property belongs in deterministic commit, where the new path is
+  capacity-checked before insertion.  The scheduler should only bound, not
+  forbid, same-edge proposals.
+- Do not run `legal7` for v7.3.
+
+v7.4 fix under test:
 
 - keep proposal-only semantics: no serial `range_router()` fallback inside the
   v7 path;
 - split each route phase into multiple transaction rounds:
   1. recompute current overflow score;
   2. sort the hot pool by overflow score;
-  3. select a deterministic independent set using unique net ids plus the
-     currently overflowed old-path edge ids;
+  3. select a deterministic bounded set using unique net ids plus old-path
+     overflow-edge quotas;
   4. generate proposals in parallel;
   5. commit proposals in deterministic order;
   6. stop when no proposal commits or `NTHU_PROPOSAL_REROUTE_MAX_ROUNDS` is
@@ -784,12 +830,14 @@ NTHU_PROPOSAL_REROUTE_BATCH_SIZE=4096
 NTHU_PROPOSAL_REROUTE_MAX_ROUNDS=6
 NTHU_PROPOSAL_REROUTE_CONFLICT_AWARE=1
 NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_CONFLICT=1
+NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA=8
 ```
 
 Expected diagnostic:
 
-- if commit rejection drops and overflow decreases per round, the issue was the
-  missing useful conflict graph;
+- if selected proposal count rises above v7.3 while commit rejection remains
+  bounded and overflow decreases, the issue was the over-exclusive old-edge
+  conflict rule;
 - if proposal time or overflow still fails the smoke gate, the current
   proposal engine needs a true soft-capacity/negotiation layer before legal7
   expansion.
