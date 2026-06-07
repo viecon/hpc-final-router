@@ -455,6 +455,14 @@ int v8_strict_legal_repair_snapshot_commit_max_overflow() {
     return parsed;
 }
 
+bool v8_strict_legal_repair_snapshot_rollback_enabled() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_SNAPSHOT_ROLLBACK");
+    if (value == nullptr || *value == '\0') {
+        return true;
+    }
+    return std::atoi(value) != 0;
+}
+
 bool v8_strict_legal_repair_improvement_commit_enabled() {
     const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_IMPROVEMENT_COMMIT");
     if (value == nullptr || *value == '\0') {
@@ -2102,6 +2110,8 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     const bool snapshot_commit = v8_strict_legal_repair_snapshot_commit_enabled();
     const int snapshot_commit_max_overflow =
             v8_strict_legal_repair_snapshot_commit_max_overflow();
+    const bool snapshot_rollback =
+            v8_strict_legal_repair_snapshot_rollback_enabled();
     const bool improvement_commit = v8_strict_legal_repair_improvement_commit_enabled();
 
     int total_inputs = 0;
@@ -2115,11 +2125,11 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     double total_commit_ms = 0.0;
 
     if (do_log) {
-        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} snapshot_commit_max={} improvement_commit={}",
+        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} snapshot_commit_max={} snapshot_rollback={} improvement_commit={}",
                 stats.total_overflow, stats.max_overflow, trigger, max_overflow,
                 rounds, max_candidates, batch_size, edge_quota, base_box,
                 fixed_base_box, box_inc, snapshot_commit,
-                snapshot_commit_max_overflow, improvement_commit);
+                snapshot_commit_max_overflow, snapshot_rollback, improvement_commit);
     }
 
     for (int round = 1; round <= rounds && stats.total_overflow > 0; ++round) {
@@ -2305,7 +2315,8 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
         const double commit_ms_value = profile_ms(commit_start, ProfileClock::now());
         stats = current_overflow_stats(congestion);
 
-        if (use_snapshot_commit && (stats.total_overflow > round_start_stats.total_overflow ||
+        if (use_snapshot_commit && snapshot_rollback &&
+                (stats.total_overflow > round_start_stats.total_overflow ||
                 (stats.total_overflow == round_start_stats.total_overflow &&
                         stats.max_overflow > round_start_stats.max_overflow))) {
             for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
