@@ -223,6 +223,14 @@ bool proposal_reroute_improvement_commit_enabled() {
     return std::getenv("NTHU_PROPOSAL_REROUTE_IMPROVEMENT_COMMIT") != nullptr;
 }
 
+bool proposal_reroute_global_commit_post_only_enabled() {
+    const char* value = std::getenv("NTHU_PROPOSAL_REROUTE_GLOBAL_COMMIT_POST_ONLY");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
 bool proposal_reroute_ripup_before_propose_enabled() {
     return std::getenv("NTHU_PROPOSAL_REROUTE_RIPUP_BEFORE_PROPOSE") != nullptr;
 }
@@ -2274,6 +2282,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         const int low_max_rounds = proposal_reroute_low_max_rounds();
         const int global_commit_limit = proposal_reroute_global_commit_limit();
         const int global_commit_max_tests = proposal_reroute_global_commit_max_tests();
+        const bool global_commit_post_only = proposal_reroute_global_commit_post_only_enabled();
 
         int total_inputs = 0;
         int total_selected = 0;
@@ -2492,6 +2501,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 bool accepted_by_global_gate = false;
                 bool evaluated_global_gate = false;
                 const bool allow_global_gate = global_commit_limit > 0 &&
+                        (!global_commit_post_only || version == 3) &&
                         (global_commit_max_tests <= 0 || proposal_global_tests < global_commit_max_tests);
                 const bool old_path_still_removed =
                         ripup_before_propose && ripped_paths[proposal_index].removed;

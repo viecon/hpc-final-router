@@ -2081,3 +2081,55 @@ V8_STRICT_LEGAL_REPAIR=1
 V8_STRICT_LEGAL_REPAIR_POST_ONLY=1
 V8_STRICT_LEGAL_REPAIR_MAX_OVERFLOW=128
 ```
+
+v8.18 post-only smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_6b7fbb2_smoke_easyhard_postonly_tail_strict_v8_18_openmp14t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.18 | safe commit + post-only low-tail/strict repair | `newblue2` | 96.430931 | 76.516170 | 0.793x | 1.157 | 0 / 0 | legal but slower |
+| v8.18 | same config | `adaptec4` | 307.841549 | 130.666544 | 0.424x | 1.111 | 5934 / 24 | rejected, hard case illegal |
+
+Evidence:
+
+```text
+newblue2: v8 low-tail self-ripup ... total_overflow=43 -> 14 -> 1 -> 0
+adaptec4: v8 strict legal repair skipped: total_overflow=2967 max_total=128
+adaptec4: 3D # of overflow = 5934, 3D max overflow = 24
+```
+
+Classification:
+
+- Post-only scheduling fixed the repeated P2 tail-repair cost and made the easy
+  original-legal case legal again.
+- It is still not a valid final config because `adaptec4` remains illegal.
+- The hard case reaches post/P3 with internal overflow around 2967, above the
+  128 repair gate.  At that point the normal local path-score proposal gate
+  rejects almost all 240 post candidates, even though a candidate might reduce
+  total overflow globally.
+
+v8.19 post-only global commit design:
+
+- expose existing `NTHU_PROPOSAL_REROUTE_GLOBAL_COMMIT_LIMIT` and
+  `NTHU_PROPOSAL_REROUTE_GLOBAL_COMMIT_MAX_TESTS` through the VM runner;
+- add `NTHU_PROPOSAL_REROUTE_GLOBAL_COMMIT_POST_ONLY`;
+- only in post/P3, allow rejected local-score candidates to be tested by full
+  `current_overflow_stats()` and accepted if total overflow decreases;
+- keep P2 unchanged so the expensive global tests do not repeat during
+  emergency iterations.
+
+Expected probe:
+
+```text
+V8_PROPOSAL_SAFE_COMMIT=1
+V8_PROPOSAL_GLOBAL_COMMIT_LIMIT=4096
+V8_PROPOSAL_GLOBAL_COMMIT_MAX_TESTS=96
+V8_PROPOSAL_GLOBAL_COMMIT_POST_ONLY=1
+V8_LOW_TAIL_POST_ONLY=1
+V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT=128
+V8_STRICT_LEGAL_REPAIR=1
+V8_STRICT_LEGAL_REPAIR_POST_ONLY=1
+```
