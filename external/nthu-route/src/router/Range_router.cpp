@@ -443,6 +443,14 @@ bool v8_strict_legal_repair_snapshot_commit_enabled() {
     return std::atoi(value) != 0;
 }
 
+bool v8_strict_legal_repair_improvement_commit_enabled() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_IMPROVEMENT_COMMIT");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
 bool v8_strict_repair_allow_same_net_enabled() {
     const char* value = std::getenv("NTHU_V8_STRICT_REPAIR_ALLOW_SAME_NET");
     if (value == nullptr || *value == '\0') {
@@ -2080,6 +2088,7 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     const int box_inc = v8_strict_legal_repair_box_inc();
     const int max_no_progress = v8_strict_legal_repair_max_no_progress();
     const bool snapshot_commit = v8_strict_legal_repair_snapshot_commit_enabled();
+    const bool improvement_commit = v8_strict_legal_repair_improvement_commit_enabled();
 
     int total_inputs = 0;
     int total_selected = 0;
@@ -2092,10 +2101,10 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     double total_commit_ms = 0.0;
 
     if (do_log) {
-        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={}",
+        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} improvement_commit={}",
                 stats.total_overflow, stats.max_overflow, trigger, max_overflow,
                 rounds, max_candidates, batch_size, edge_quota, base_box,
-                fixed_base_box, box_inc, snapshot_commit);
+                fixed_base_box, box_inc, snapshot_commit, improvement_commit);
     }
 
     for (int round = 1; round <= rounds && stats.total_overflow > 0; ++round) {
@@ -2242,12 +2251,19 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
                     continue;
                 }
 
+                const int original_overflow_score = improvement_commit
+                        ? path_overflow_score(two_pin, congestion)
+                        : 0;
                 const std::vector<Coordinate_2d> original_path(two_pin.path);
                 const Coordinate_2d original_pin1 = two_pin.pin1;
                 const Coordinate_2d original_pin2 = two_pin.pin2;
                 congestion.update_congestion_map_remove_two_pin_net(original_path, two_pin.net_id);
 
-                if (congestion.check_path_no_overflow(proposal.path, two_pin.net_id, true)) {
+                const bool accept_proposal = improvement_commit
+                        ? (inserted_path_overflow_score(proposal.path, two_pin.net_id, congestion)
+                                < original_overflow_score)
+                        : congestion.check_path_no_overflow(proposal.path, two_pin.net_id, true);
+                if (accept_proposal) {
                     two_pin.path = proposal.path;
                     two_pin.pin1 = two_pin.path.front();
                     two_pin.pin2 = two_pin.path.back();
