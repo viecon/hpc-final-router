@@ -463,6 +463,14 @@ bool v8_strict_legal_repair_snapshot_rollback_enabled() {
     return std::atoi(value) != 0;
 }
 
+bool v8_strict_legal_repair_rollback_no_progress_enabled() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_ROLLBACK_NO_PROGRESS");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
 bool v8_strict_legal_repair_snapshot_global_gate_enabled() {
     const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_SNAPSHOT_GLOBAL_GATE");
     if (value == nullptr || *value == '\0') {
@@ -2212,6 +2220,8 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
             v8_strict_legal_repair_snapshot_commit_max_overflow();
     const bool snapshot_rollback =
             v8_strict_legal_repair_snapshot_rollback_enabled();
+    const bool rollback_no_progress =
+            v8_strict_legal_repair_rollback_no_progress_enabled();
     const bool snapshot_global_gate =
             v8_strict_legal_repair_snapshot_global_gate_enabled();
     const int snapshot_burst_total =
@@ -2237,13 +2247,13 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     double total_commit_ms = 0.0;
 
     if (do_log) {
-        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} snapshot_commit_max={} snapshot_rollback={} snapshot_global_gate={} snapshot_burst_total={} snapshot_burst_max={} improvement_commit={} reuse_inputs={} overflow_net_inputs={}",
+        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} snapshot_commit_max={} snapshot_rollback={} rollback_no_progress={} snapshot_global_gate={} snapshot_burst_total={} snapshot_burst_max={} improvement_commit={} reuse_inputs={} overflow_net_inputs={}",
                 stats.total_overflow, stats.max_overflow, trigger, max_overflow,
                 rounds, max_candidates, batch_size, edge_quota, base_box,
                 fixed_base_box, box_inc, snapshot_commit,
-                snapshot_commit_max_overflow, snapshot_rollback, snapshot_global_gate,
-                snapshot_burst_total, snapshot_burst_max, improvement_commit,
-                reuse_inputs, overflow_net_inputs);
+                snapshot_commit_max_overflow, snapshot_rollback, rollback_no_progress,
+                snapshot_global_gate, snapshot_burst_total, snapshot_burst_max,
+                improvement_commit, reuse_inputs, overflow_net_inputs);
     }
 
     std::unordered_map<int, std::vector<Two_pin_element_2d*>> twopins_by_net;
@@ -2606,7 +2616,7 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
                 stats.total_overflow < round_start_stats.total_overflow ||
                 (stats.total_overflow == round_start_stats.total_overflow &&
                         stats.max_overflow < round_start_stats.max_overflow);
-        if (!round_improved && committed > 0 && snapshot_rollback) {
+        if (rollback_no_progress && !round_improved && committed > 0 && snapshot_rollback) {
             restore_selected_originals();
             stats = current_overflow_stats(congestion);
             committed = 0;
@@ -2645,7 +2655,9 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
                 stats.total_overflow < round_start_stats.total_overflow ||
                 (stats.total_overflow == round_start_stats.total_overflow &&
                         stats.max_overflow < round_start_stats.max_overflow);
-        if (!progress) {
+        const bool no_progress =
+                rollback_no_progress ? !progress : committed == 0;
+        if (no_progress) {
             ++no_progress_rounds;
             if (no_progress_rounds >= max_no_progress) {
                 break;

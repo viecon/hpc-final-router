@@ -2721,3 +2721,82 @@ v8.41 implementation fix:
 This preserves the paper-inspired transaction structure: proposal generation can
 still run in parallel, but commit is only retained when the deterministic global
 state actually improves.
+
+v8.41 smoke rerun after no-progress rollback:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_089a7bb_smoke_easyhard_highstrict50000_v8_41_openmp14t
+commit=089a7bb
+same high-overflow strict-repair config as v8.40
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.41 | `newblue2` | 140.901073 | 76.516170 | 0.543x | 8784581 | 1.157x | 56 / 2 | rejected; illegal |
+| v8.41 | `adaptec4` | killed after easy failure | 130.666544 | NA | NA | NA | NA | not run to completion |
+
+Evidence:
+
+```text
+newblue2 2D routing completed around 127.092s with residual 2D overflow:
+  2D sum overflow=56
+  2D max overflow=4
+Layer assignment preserved illegal 3D overflow:
+  3D # of overflow=56
+  3D max overflow=2
+Checker summary:
+  total_wirelength=8784581
+  total_overflow=56
+  max_overflow=2
+  overflowed_nets=660
+  overflowed_edges=28
+```
+
+Classification:
+
+- The v8.41 code fix worked mechanically: no-progress strict-repair commits are
+  rolled back instead of being kept.
+- The high-overflow strict-repair configuration is still rejected because it
+  exits faster but leaves legal overflow on a benchmark where original is legal.
+- The next control run is v8.42: same code commit `089a7bb`, but return to the
+  v8.39 low-threshold legal config to verify the code fix did not break the
+  previously legal smoke.
+
+v8.42 control smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_089a7bb_smoke_easyhard_pathlocal_gate1024_v8_42_openmp14t
+commit=089a7bb
+same low-threshold config as v8.39
+```
+
+v8.42 control result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.42 | `newblue2` | killed after easy failure | 76.516170 | NA | router log 8777698 | 1.155x | log 22 / 2 before checker | rejected; code fix broke legal config |
+| v8.42 | `adaptec4` | not run | 130.666544 | NA | NA | NA | NA | skipped |
+
+Evidence:
+
+```text
+v8.42 used the same low-threshold config as legal v8.39, but with commit 089a7bb.
+newblue2 2D route time was 98.4288s.
+Layer assignment reported:
+  3D # of overflow=22
+  3D max overflow=2
+  total wire length=8777698
+The run was killed before hard smoke because easy smoke was already illegal.
+```
+
+Classification:
+
+- The no-progress rollback change is too strong as a default behavior.
+- v8.39 legality depended on retaining some neutral strict-repair moves; rolling
+  them back avoids local churn but blocks eventual convergence.
+- v8.43 changes the fix into an opt-in experiment knob:
+  `NTHU_V8_STRICT_LEGAL_REPAIR_ROLLBACK_NO_PROGRESS=1`.
+- Default behavior returns to the v8.39 rule: no-progress is counted by
+  `committed == 0`, not by immediate global-overflow improvement.
