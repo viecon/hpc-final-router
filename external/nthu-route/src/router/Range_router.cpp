@@ -251,6 +251,14 @@ bool v8_low_tail_global_repair_enabled() {
     return std::getenv("NTHU_V8_LOW_TAIL_GLOBAL_REPAIR") != nullptr;
 }
 
+bool v8_low_tail_post_only_enabled() {
+    const char* value = std::getenv("NTHU_V8_LOW_TAIL_POST_ONLY");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
 int v8_low_tail_global_repair_limit() {
     const char* value = std::getenv("NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT");
     if (value == nullptr || *value == '\0') {
@@ -317,6 +325,14 @@ bool v8_low_tail_strict_capacity_enabled() {
 
 bool v8_strict_legal_repair_enabled() {
     const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
+bool v8_strict_legal_repair_post_only_enabled() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_POST_ONLY");
     if (value == nullptr || *value == '\0') {
         return false;
     }
@@ -2000,6 +2016,12 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     }
 
     const bool do_log = profile_enabled() || proposal_reroute_log_enabled();
+    if (v8_strict_legal_repair_post_only_enabled() && version != 3) {
+        if (do_log) {
+            log_sp->info("v8 strict legal repair skipped: post_only=1 version={}", version);
+        }
+        return;
+    }
     OverflowStats stats = current_overflow_stats(congestion);
     const int trigger = v8_strict_legal_repair_trigger();
     const int max_overflow = v8_strict_legal_repair_max_overflow();
@@ -2555,7 +2577,8 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                     adaptive_rounds ? 1 : 0, phase_start_overflow.total_overflow,
                     allow_maze ? 1 : 0, total_proposal_ms, total_commit_ms);
         }
-        if (v8_low_tail_global_repair_enabled()) {
+        if (v8_low_tail_global_repair_enabled() &&
+                (!v8_low_tail_post_only_enabled() || version == 3)) {
             const int tail_limit = v8_low_tail_global_repair_limit();
             OverflowStats tail_stats = current_overflow_stats(congestion);
             if (tail_limit > 0 && tail_stats.total_overflow > 0 &&

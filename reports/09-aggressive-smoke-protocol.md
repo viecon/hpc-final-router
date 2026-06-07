@@ -2010,3 +2010,74 @@ Acceptance for the next smoke:
 - `newblue2` must return to `overflow=0,max_overflow=0` because original is legal;
 - any run over the 3x original gate is killed and classified;
 - if easy+hard smoke passes, expand to `legal7` with the exact same config.
+
+v8.16 safe proposal commit smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_f567792_smoke_easyhard_safecommit_v8_16_openmp14t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.16 | safe proposal commit, default low-tail limit 16 | `newblue2` | 93.997339 | 76.516170 | 0.814x | 1.158 | 86 / 2 | rejected, original-legal case still illegal |
+
+Evidence:
+
+- `safe_commit=1` is active in every proposal log line.
+- CPU utilization during proposal was about 5.8-7.3 cores on the 14-thread run;
+  early and late stages were closer to one core.
+- Compared with v8.15c, overflow improved from `1584 / 24` to `86 / 2`, so the
+  restored-snapshot deterministic commit fixed a real part of the OpenMP
+  correctness problem.
+- The remaining issue is a low-overflow tail; the run was killed before
+  `adaptec4` finished because `newblue2` already failed the original-legal
+  guard.
+
+v8.17 config probe:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_f567792_smoke_easyhard_safecommit_lowtail128_v8_17_openmp14t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Result | Decision |
+| --- | --- | --- | ---: | ---: | --- | --- |
+| v8.17 | safe commit + low-tail limit 128 + 128 self-ripup tests | `newblue2` | 230 gate | 76.516170 | timeout | rejected, low-tail repair cost explodes |
+
+Evidence:
+
+```text
+v8 low-tail global repair ... total_overflow=118 -> 116, commit_ms=9721
+v8 low-tail self-ripup ... total_overflow=88 -> 73, elapsed_ms=10442
+...
+timeout=1
+```
+
+Classification:
+
+- The repair strategy is logically moving overflow down, but it is being called
+  repeatedly inside P2 emergency iterations.
+- That means the same small overflow tail pays repeated full-grid
+  `current_overflow_stats()` commit tests.
+- This is an implementation/scheduling problem, not evidence that the
+  transaction model itself cannot work.
+
+v8.18 post-only tail/legalization design:
+
+- add `NTHU_V8_LOW_TAIL_POST_ONLY`;
+- add `NTHU_V8_STRICT_LEGAL_REPAIR_POST_ONLY`;
+- keep parallel proposal and emergency P2 unchanged;
+- run expensive low-tail global/self-ripup and strict legal repair only in
+  post/P3 (`version == 3`) when these phases are explicitly enabled.
+
+Expected probe:
+
+```text
+V8_PROPOSAL_SAFE_COMMIT=1
+V8_LOW_TAIL_POST_ONLY=1
+V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT=128
+V8_LOW_TAIL_GLOBAL_REPAIR_MAX_CANDIDATES=512
+V8_LOW_TAIL_SELF_RIPUP_MAX_TESTS=128
+V8_STRICT_LEGAL_REPAIR=1
+V8_STRICT_LEGAL_REPAIR_POST_ONLY=1
+V8_STRICT_LEGAL_REPAIR_MAX_OVERFLOW=128
+```
