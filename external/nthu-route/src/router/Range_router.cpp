@@ -471,6 +471,22 @@ bool v8_strict_legal_repair_snapshot_global_gate_enabled() {
     return std::atoi(value) != 0;
 }
 
+int v8_strict_legal_repair_snapshot_burst_total() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_SNAPSHOT_BURST_TOTAL");
+    if (value == nullptr || *value == '\0') {
+        return 0;
+    }
+    return std::max(0, std::atoi(value));
+}
+
+int v8_strict_legal_repair_snapshot_burst_max() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_SNAPSHOT_BURST_MAX");
+    if (value == nullptr || *value == '\0') {
+        return 0;
+    }
+    return std::max(0, std::atoi(value));
+}
+
 bool v8_strict_legal_repair_improvement_commit_enabled() {
     const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_IMPROVEMENT_COMMIT");
     if (value == nullptr || *value == '\0') {
@@ -2154,6 +2170,10 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
             v8_strict_legal_repair_snapshot_rollback_enabled();
     const bool snapshot_global_gate =
             v8_strict_legal_repair_snapshot_global_gate_enabled();
+    const int snapshot_burst_total =
+            v8_strict_legal_repair_snapshot_burst_total();
+    const int snapshot_burst_max =
+            v8_strict_legal_repair_snapshot_burst_max();
     const bool improvement_commit = v8_strict_legal_repair_improvement_commit_enabled();
     const bool reuse_inputs = v8_strict_legal_repair_reuse_inputs_enabled();
     const bool overflow_net_inputs =
@@ -2166,17 +2186,19 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     int total_rejected = 0;
     int total_rolled_back = 0;
     int total_global_gated = 0;
+    int total_snapshot_burst = 0;
     int no_progress_rounds = 0;
     double total_proposal_ms = 0.0;
     double total_commit_ms = 0.0;
 
     if (do_log) {
-        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} snapshot_commit_max={} snapshot_rollback={} snapshot_global_gate={} improvement_commit={} reuse_inputs={} overflow_net_inputs={}",
+        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} snapshot_commit_max={} snapshot_rollback={} snapshot_global_gate={} snapshot_burst_total={} snapshot_burst_max={} improvement_commit={} reuse_inputs={} overflow_net_inputs={}",
                 stats.total_overflow, stats.max_overflow, trigger, max_overflow,
                 rounds, max_candidates, batch_size, edge_quota, base_box,
                 fixed_base_box, box_inc, snapshot_commit,
                 snapshot_commit_max_overflow, snapshot_rollback, snapshot_global_gate,
-                improvement_commit, reuse_inputs, overflow_net_inputs);
+                snapshot_burst_total, snapshot_burst_max, improvement_commit,
+                reuse_inputs, overflow_net_inputs);
     }
 
     std::unordered_map<int, std::vector<Two_pin_element_2d*>> twopins_by_net;
@@ -2318,6 +2340,7 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
         int rejected = 0;
         bool rolled_back = false;
         bool global_gated = false;
+        bool snapshot_burst = false;
         const bool use_snapshot_commit = snapshot_commit &&
                 round_start_stats.total_overflow <= snapshot_commit_max_overflow;
         auto restore_selected_originals = [&]() {
@@ -2427,7 +2450,13 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
                 (stats.total_overflow > round_start_stats.total_overflow ||
                 (stats.total_overflow == round_start_stats.total_overflow &&
                         stats.max_overflow > round_start_stats.max_overflow));
-        if (snapshot_worsened && snapshot_global_gate) {
+        const bool snapshot_burst_allowed = snapshot_worsened &&
+                snapshot_burst_total > 0 && round < rounds &&
+                stats.total_overflow <= round_start_stats.total_overflow + snapshot_burst_total &&
+                stats.max_overflow <= round_start_stats.max_overflow + snapshot_burst_max;
+        if (snapshot_burst_allowed) {
+            snapshot_burst = true;
+        } else if (snapshot_worsened && snapshot_global_gate) {
             restore_selected_originals();
             stats = current_overflow_stats(congestion);
             committed = 0;
@@ -2503,15 +2532,19 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
         if (global_gated) {
             ++total_global_gated;
         }
+        if (snapshot_burst) {
+            ++total_snapshot_burst;
+        }
         total_proposal_ms += proposal_ms_value;
         total_commit_ms += commit_ms_value;
 
         if (do_log) {
-            log_sp->info("v8 strict legal repair round={} inputs={} selected={} conflict_skipped={} proposed={} committed={} rejected={} snapshot_round={} global_gated={} rolled_back={} total_overflow={} max_overflow={} box={} edge_quota={} proposal_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("v8 strict legal repair round={} inputs={} selected={} conflict_skipped={} proposed={} committed={} rejected={} snapshot_round={} snapshot_burst={} global_gated={} rolled_back={} total_overflow={} max_overflow={} box={} edge_quota={} proposal_ms={:.3f} commit_ms={:.3f}",
                     round, inputs.size(), selected.size(), conflict_skipped, proposed,
-                    committed, rejected, use_snapshot_commit, global_gated, rolled_back,
-                    stats.total_overflow, stats.max_overflow, repair_box, edge_quota,
-                    proposal_ms_value, commit_ms_value);
+                    committed, rejected, use_snapshot_commit, snapshot_burst,
+                    global_gated, rolled_back, stats.total_overflow,
+                    stats.max_overflow, repair_box, edge_quota, proposal_ms_value,
+                    commit_ms_value);
         }
 
         if (committed == 0) {
@@ -2525,10 +2558,11 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     }
 
     if (do_log) {
-        log_sp->info("v8 strict legal repair phase inputs={} selected={} proposed={} committed={} rejected={} global_gated={} rolled_back={} total_overflow={} max_overflow={} proposal_ms={:.3f} commit_ms={:.3f}",
+        log_sp->info("v8 strict legal repair phase inputs={} selected={} proposed={} committed={} rejected={} global_gated={} rolled_back={} snapshot_burst={} total_overflow={} max_overflow={} proposal_ms={:.3f} commit_ms={:.3f}",
                 total_inputs, total_selected, total_proposed, total_committed,
-                total_rejected, total_global_gated, total_rolled_back, stats.total_overflow,
-                stats.max_overflow, total_proposal_ms, total_commit_ms);
+                total_rejected, total_global_gated, total_rolled_back,
+                total_snapshot_burst, stats.total_overflow, stats.max_overflow,
+                total_proposal_ms, total_commit_ms);
     }
 }
 

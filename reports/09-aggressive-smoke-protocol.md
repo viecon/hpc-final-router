@@ -2292,3 +2292,74 @@ Classification:
   committing isolated strict paths.
 - v8.21 remains the best result in this subseries for easy speed, but no
   v8.20-v8.22 config passes the original-legal guard on the easy+hard smoke.
+
+### v8.23-v8.34 Strict Tail Repair Series
+
+The next subseries focused on the hard tail where only a small number of
+overflow edges remain but isolated strict proposals do not converge.  The
+implementation still follows the NTHU-style rip-up/reroute flow: keep the
+existing tree/path model, propose reroutes in parallel, then update global
+congestion through deterministic commit.
+
+Literature checked for this step:
+
+- NCTU-GR 2.0 uses task-based, collision-aware multithreading plus
+  bounded-length maze routing rather than static region partitioning:
+  <https://ir.lib.nycu.edu.tw/bitstream/11536/21646/1/000318163800005.pdf>
+- The DSD 2013 overlapped-region method runs route-search in parallel on shared
+  regions, then uses exclusive area-update and reroutes failed candidates:
+  <https://www.researchgate.net/publication/262361280_A_Multithreaded_Parallel_Global_Routing_Method_with_Overlapped_Routing_Regions>
+- SPRoute lowers parallelism when livelock is detected and later switches to a
+  finer-grain convergence mode:
+  <https://userweb.cs.txstate.edu/~burtscher/papers/iccad19.pdf>
+- SPRoute 2.0 emphasizes deterministic parallel routing and soft capacity:
+  <https://csl.yale.edu/~rajit/ps/ASPDAC_2022.pdf>
+
+Baseline denominators for this smoke pair:
+
+| Benchmark | Original seconds | Original WL | Original overflow |
+| --- | ---: | ---: | --- |
+| `newblue2` | 76.516170 | 7595602 | 0 / 0 |
+| `adaptec4` | 130.666544 | 12207270 | 0 / 0 |
+
+Result matrix:
+
+| Version | Change | `newblue2` result | `adaptec4` result | Classification |
+| --- | --- | --- | --- | --- |
+| v8.23 | low-tail limit 2048 | 87.500506s, 0.875x, WL 1.158x, 0 / 0 | 392s timeout | rejected: hard timeout |
+| v8.24 | strict P2, no low-tail | 95.191284s, 0.804x, WL 1.156x, 30 / 2 | killed after easy | rejected: easy illegal |
+| v8.25 | strict P2, edge quota 8 | 109.632760s, 0.698x, WL 1.156x, 44 / 2 | killed after easy | rejected: easy illegal |
+| v8.26 | fixed box 66 + snapshot commit | 89.629327s, 0.854x, WL 1.156x, 0 / 0 | killed on hard blow-up | rejected: hard non-monotonic |
+| v8.27 | snapshot commit + rollback | 127.596546s, 0.600x, WL 1.155x, 94 / 2 | killed after easy | rejected: rollback too conservative and still illegal |
+| v8.28 | improvement commit only | log-only 101.366s, 0.755x, WL 1.156x, 4 / 2 | killed after easy | rejected: isolated improvement does not clear tail |
+| v8.29 | improvement + snapshot<=8 + rollback | 100.887878s, 0.758x, WL 1.156x, 10 / 2 | killed after easy | rejected: adaptive snapshot still illegal |
+| v8.30 | snapshot<=8, no rollback | 86.892735s, 0.881x, WL 1.156x, 0 / 0 | 321.401472s, 0.407x, WL 1.112x, 126 / 2 | rejected: hard illegal |
+| v8.31 | snapshot<=128, no rollback | 78.684625s, 0.972x, WL 1.156x, 0 / 0 | 315.326657s, 0.414x, WL 1.112x, 260 / 4 | rejected: larger batches speed easy but worsen hard overflow |
+| v8.32 | snapshot global gate | 154.865267s, 0.494x, WL 1.156x, 0 / 0 | 392s timeout | rejected: legal but gate is too serial/expensive |
+| v8.33 | global gate + reused inputs | 178.998040s, 0.428x, WL 1.156x, 4 / 2 | killed after easy | rejected: input reuse changes coverage and breaks legality |
+| v8.34 | global gate + overflow-net inputs | 230s timeout; router log reached WL 8779659 and overflow 16 before evaluator timeout | killed after easy timeout | rejected: active set did not improve tail convergence |
+
+Interpretation:
+
+- v8.30/v8.31 show why pure snapshot commit is not sufficient: parallel proposal
+  search is fast enough to clear `newblue2`, but accepting a stale batch without
+  any global guard creates residual hard-case overflow.
+- v8.32 shows the opposite failure mode: deterministic global gating restores
+  safety, but it serializes too much of the tail and loses the whole speed
+  purpose.
+- v8.33 and v8.34 were implementation shortcuts to reduce input generation cost.
+  They were rejected because they changed proposal coverage before legality was
+  solved.
+
+v8.35 bounded-burst gate:
+
+- keep parallel route-search and snapshot commit;
+- allow a small deterministic "overflow burst" only if the batch worsens total
+  overflow and max overflow by no more than configured bounds and there are
+  later repair rounds left;
+- if the burst exceeds the bound, fall back to the v8.32 global gate;
+- if the final round worsens, do not accept it.
+
+This is a direct compromise between the DSD 2013 area-update idea and SPRoute's
+livelock-aware reduction of parallelism: keep batch parallelism while limiting
+how far a stale snapshot can move the congestion state away from convergence.
