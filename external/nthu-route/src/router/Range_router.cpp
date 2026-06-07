@@ -427,6 +427,14 @@ int v8_strict_legal_repair_max_no_progress() {
     return std::max(1, std::atoi(value));
 }
 
+bool v8_strict_repair_allow_same_net_enabled() {
+    const char* value = std::getenv("NTHU_V8_STRICT_REPAIR_ALLOW_SAME_NET");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
 int proposal_reroute_overflow_edge_quota() {
     const char* value = std::getenv("NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA");
     if (value == nullptr || *value == '\0') {
@@ -752,6 +760,7 @@ bool find_strict_legal_maze_path(const NTHUR::Two_pin_element_2d& two_pin,
 
     const int source = index_of(two_pin.pin1);
     const int target = index_of(two_pin.pin2);
+    const bool allow_same_net = v8_strict_repair_allow_same_net_enabled();
     std::vector<double> dist(area, std::numeric_limits<double>::infinity());
     std::vector<int> parent(area, -1);
     using QueueItem = std::pair<double, int>;
@@ -783,15 +792,16 @@ bool find_strict_legal_maze_path(const NTHUR::Two_pin_element_2d& two_pin,
                 continue;
             }
             const NTHUR::Edge_2d& edge = congestion.congestionMap2d.edge(current, next);
-            // Reallocation rebuilds each net as a tree; reusing same-net edges can create cycles.
-            if (edge.lookupNet(two_pin.net_id)) {
+            const bool same_net_edge = edge.lookupNet(two_pin.net_id);
+            if (!allow_same_net && same_net_edge) {
                 continue;
             }
-            if (edge.cur_cap + 1.0 > edge.max_cap) {
+            const double demand_increment = same_net_edge ? 0.0 : 1.0;
+            if (edge.cur_cap + demand_increment > edge.max_cap) {
                 continue;
             }
             const int next_index = index_of(next);
-            const double edge_cost = 1.0 + std::max(0.0, edge.cost);
+            const double edge_cost = (same_net_edge ? 0.05 : 1.0) + std::max(0.0, edge.cost);
             const double next_cost = cost + edge_cost;
             if (next_cost < dist[next_index]) {
                 dist[next_index] = next_cost;
