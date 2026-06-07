@@ -630,7 +630,7 @@ frontier_proposal_reroute_v7
 NTHU_PROPOSAL_REROUTE_BATCHES=1
 NTHU_PROPOSAL_REROUTE_MAZE=1
 NTHU_PROPOSAL_REROUTE_LOG=1
-NTHU_PROPOSAL_REROUTE_MAX_CANDIDATES=0
+NTHU_PROPOSAL_REROUTE_MAX_CANDIDATES=16384
 ```
 
 Paper mapping:
@@ -649,6 +649,38 @@ Smoke rule:
 - if smoke is legal and not slower than the legal baseline family, expand to
   `legal7`; otherwise classify as implementation/support issue or invalid
   optimization logic before trying another aggressive direction.
+
+Initial v7 smoke result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_5749c5b_smoke_002
+```
+
+Both smoke rows hit the 3x-original timeout gate:
+
+| Benchmark | Gate | Result |
+| --- | ---: | --- |
+| `newblue2` | 230s | timeout before first proposal summary |
+| `adaptec4` | 392s | timeout during iteration 2 |
+
+Observed `adaptec4` first iteration:
+
+```text
+proposal reroute phase candidates=180253 proposed=35496 committed=10769
+rejected=24727 skipped=144757 allow_maze=1 proposal_ms=330979.158
+commit_ms=724.081
+```
+
+Classification:
+
+- This is an implementation/support issue within the v7 experiment, not enough
+  evidence to reject phased proposal-only routing.
+- The bug is that v7.0 sent every overflow candidate into local maze proposal.
+  That defeats the collision-aware scheduling idea and makes proposal search
+  dominate runtime before deterministic commit matters.
+- v7.1 keeps the same proposal-only algorithmic structure but sorts by current
+  overflow score and caps proposal work at top `16384` candidates.  This is a
+  routing-state based task scheduling rule, not a benchmark-specific branch.
 
 ## Guard Expansion: original-legal legal7
 

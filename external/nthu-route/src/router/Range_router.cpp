@@ -1593,20 +1593,49 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         const bool do_profile = profile_enabled();
         const bool do_log = do_profile || proposal_reroute_log_enabled();
         const auto proposal_start = ProfileClock::now();
-        std::vector<Two_pin_element_2d*> overflow_twopins;
-        overflow_twopins.reserve(twopin_list.size());
+        struct ProposalInput {
+            Two_pin_element_2d* two_pin;
+            int overflow_score;
+        };
+        int min_reroute_score = reroute_min_overflow_score();
+        const int score_until_iter = reroute_score_until_iter();
+        const int late_score_after_iter = reroute_late_score_after_iter();
+        const int late_min_reroute_score = reroute_late_min_overflow_score();
+        if (version == 2 && late_score_after_iter >= 0 && late_min_reroute_score > 0 &&
+                congestion.cur_iter > late_score_after_iter) {
+            min_reroute_score = late_min_reroute_score;
+        }
+        if ((version == 3 && reroute_score_p2_only_enabled()) ||
+                (score_until_iter >= 0 && (version == 3 || congestion.cur_iter > score_until_iter))) {
+            min_reroute_score = 1;
+        }
+        std::vector<ProposalInput> proposal_inputs;
+        proposal_inputs.reserve(twopin_list.size());
         for (Two_pin_element_2d* two_pin : twopin_list) {
-            if (!congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false)) {
-                overflow_twopins.push_back(two_pin);
+            const int overflow_score = path_overflow_score(*two_pin, congestion);
+            if (overflow_score >= min_reroute_score) {
+                proposal_inputs.push_back(ProposalInput { two_pin, overflow_score });
             }
         }
-        if (overflow_twopins.empty()) {
+        if (proposal_inputs.empty()) {
             return;
         }
+        std::sort(proposal_inputs.begin(), proposal_inputs.end(),
+                [](const ProposalInput& a, const ProposalInput& b) {
+                    if (a.overflow_score != b.overflow_score) {
+                        return a.overflow_score > b.overflow_score;
+                    }
+                    return Two_pin_element_2d::comp_stn_2pin(*a.two_pin, *b.two_pin);
+                });
 
         const int max_candidates = proposal_reroute_max_candidates();
-        if (max_candidates < static_cast<int>(overflow_twopins.size())) {
-            overflow_twopins.resize(max_candidates);
+        if (max_candidates < static_cast<int>(proposal_inputs.size())) {
+            proposal_inputs.resize(max_candidates);
+        }
+        std::vector<Two_pin_element_2d*> overflow_twopins;
+        overflow_twopins.reserve(proposal_inputs.size());
+        for (const ProposalInput& input : proposal_inputs) {
+            overflow_twopins.push_back(input.two_pin);
         }
 
         std::vector<RerouteProposal> proposals(overflow_twopins.size());

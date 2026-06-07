@@ -432,7 +432,7 @@ if strategy_enabled frontier_proposal_reroute_v7; then
     NTHU_PROPOSAL_REROUTE_BATCHES=1
     NTHU_PROPOSAL_REROUTE_MAZE=1
     NTHU_PROPOSAL_REROUTE_LOG=1
-    NTHU_PROPOSAL_REROUTE_MAX_CANDIDATES=0
+    NTHU_PROPOSAL_REROUTE_MAX_CANDIDATES=16384
   )
   run_one frontier_proposal_reroute_v7 easy newblue2.fastplace90.3d.50.20.100 230 "$frontier_args" "${common_candidate[@]}"
   run_one frontier_proposal_reroute_v7 hard adaptec4.aplace60.3d.30.50.90 392 "$frontier_args" "${common_candidate[@]}"
