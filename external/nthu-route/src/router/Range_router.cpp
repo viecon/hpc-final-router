@@ -411,6 +411,14 @@ int v8_strict_legal_repair_base_box() {
     return std::max(0, std::atoi(value));
 }
 
+int v8_strict_legal_repair_fixed_base_box() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_FIXED_BASE_BOX");
+    if (value == nullptr || *value == '\0') {
+        return -1;
+    }
+    return std::max(0, std::atoi(value));
+}
+
 int v8_strict_legal_repair_box_inc() {
     const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_BOX_INC");
     if (value == nullptr || *value == '\0') {
@@ -425,6 +433,14 @@ int v8_strict_legal_repair_max_no_progress() {
         return 2;
     }
     return std::max(1, std::atoi(value));
+}
+
+bool v8_strict_legal_repair_snapshot_commit_enabled() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_SNAPSHOT_COMMIT");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
 }
 
 bool v8_strict_repair_allow_same_net_enabled() {
@@ -2056,10 +2072,14 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     const int max_candidates = v8_strict_legal_repair_max_candidates();
     const int batch_size = v8_strict_legal_repair_batch_size();
     const int edge_quota = v8_strict_legal_repair_edge_quota();
-    const int base_box = std::max(construct_2d_tree.BOXSIZE_INC,
-            v8_strict_legal_repair_base_box());
+    const int fixed_base_box = v8_strict_legal_repair_fixed_base_box();
+    const int base_box = fixed_base_box >= 0
+            ? fixed_base_box
+            : std::max(construct_2d_tree.BOXSIZE_INC,
+                    v8_strict_legal_repair_base_box());
     const int box_inc = v8_strict_legal_repair_box_inc();
     const int max_no_progress = v8_strict_legal_repair_max_no_progress();
+    const bool snapshot_commit = v8_strict_legal_repair_snapshot_commit_enabled();
 
     int total_inputs = 0;
     int total_selected = 0;
@@ -2071,9 +2091,10 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     double total_commit_ms = 0.0;
 
     if (do_log) {
-        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} box_inc={}",
+        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={}",
                 stats.total_overflow, stats.max_overflow, trigger, max_overflow,
-                rounds, max_candidates, batch_size, edge_quota, base_box, box_inc);
+                rounds, max_candidates, batch_size, edge_quota, base_box,
+                fixed_base_box, box_inc, snapshot_commit);
     }
 
     for (int round = 1; round <= rounds && stats.total_overflow > 0; ++round) {
@@ -2162,53 +2183,88 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
         }
         const double proposal_ms_value = profile_ms(proposal_start, ProfileClock::now());
 
-        for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
-            Two_pin_element_2d& two_pin = *selected[i];
-            two_pin.path = states[i].original_path;
-            two_pin.pin1 = states[i].original_pin1;
-            two_pin.pin2 = states[i].original_pin2;
-            congestion.update_congestion_map_insert_two_pin_net(two_pin);
-        }
-
         const auto commit_start = ProfileClock::now();
         int proposed = 0;
         int committed = 0;
         int rejected = 0;
-        for (RerouteProposal& proposal : proposals) {
-            if (!proposal.proposed || proposal.path.size() < 2) {
-                continue;
-            }
-            ++proposed;
-            Two_pin_element_2d& two_pin = *proposal.two_pin;
-            if (congestion.check_path_no_overflow(two_pin.path, two_pin.net_id, false)) {
-                continue;
-            }
-
-            const std::vector<Coordinate_2d> original_path(two_pin.path);
-            const Coordinate_2d original_pin1 = two_pin.pin1;
-            const Coordinate_2d original_pin2 = two_pin.pin2;
-            congestion.update_congestion_map_remove_two_pin_net(original_path, two_pin.net_id);
-
-            if (congestion.check_path_no_overflow(proposal.path, two_pin.net_id, true)) {
-                two_pin.path = proposal.path;
-                two_pin.pin1 = two_pin.path.front();
-                two_pin.pin2 = two_pin.path.back();
-                if (version == 2) {
-                    two_pin.done = construct_2d_tree.done_iter;
+        if (snapshot_commit) {
+            for (RerouteProposal& proposal : proposals) {
+                if (!proposal.proposed || proposal.path.size() < 2) {
+                    continue;
                 }
-                construct_2d_tree.NetDirtyBit[two_pin.net_id] = true;
+                ++proposed;
+                Two_pin_element_2d& two_pin = *proposal.two_pin;
+                if (congestion.check_path_no_overflow(proposal.path, two_pin.net_id, true)) {
+                    two_pin.path = proposal.path;
+                    two_pin.pin1 = two_pin.path.front();
+                    two_pin.pin2 = two_pin.path.back();
+                    if (version == 2) {
+                        two_pin.done = construct_2d_tree.done_iter;
+                    }
+                    construct_2d_tree.NetDirtyBit[two_pin.net_id] = true;
+                    congestion.update_congestion_map_insert_two_pin_net(two_pin);
+                    proposal.committed = true;
+                    ++committed;
+                } else {
+                    proposal.rejected = true;
+                    ++rejected;
+                }
+            }
+            for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
+                if (proposals[i].committed) {
+                    continue;
+                }
+                Two_pin_element_2d& two_pin = *selected[i];
+                two_pin.path = states[i].original_path;
+                two_pin.pin1 = states[i].original_pin1;
+                two_pin.pin2 = states[i].original_pin2;
                 congestion.update_congestion_map_insert_two_pin_net(two_pin);
-                proposal.committed = true;
-                ++committed;
-                continue;
+            }
+        } else {
+            for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
+                Two_pin_element_2d& two_pin = *selected[i];
+                two_pin.path = states[i].original_path;
+                two_pin.pin1 = states[i].original_pin1;
+                two_pin.pin2 = states[i].original_pin2;
+                congestion.update_congestion_map_insert_two_pin_net(two_pin);
             }
 
-            two_pin.path = original_path;
-            two_pin.pin1 = original_pin1;
-            two_pin.pin2 = original_pin2;
-            congestion.update_congestion_map_insert_two_pin_net(two_pin);
-            proposal.rejected = true;
-            ++rejected;
+            for (RerouteProposal& proposal : proposals) {
+                if (!proposal.proposed || proposal.path.size() < 2) {
+                    continue;
+                }
+                ++proposed;
+                Two_pin_element_2d& two_pin = *proposal.two_pin;
+                if (congestion.check_path_no_overflow(two_pin.path, two_pin.net_id, false)) {
+                    continue;
+                }
+
+                const std::vector<Coordinate_2d> original_path(two_pin.path);
+                const Coordinate_2d original_pin1 = two_pin.pin1;
+                const Coordinate_2d original_pin2 = two_pin.pin2;
+                congestion.update_congestion_map_remove_two_pin_net(original_path, two_pin.net_id);
+
+                if (congestion.check_path_no_overflow(proposal.path, two_pin.net_id, true)) {
+                    two_pin.path = proposal.path;
+                    two_pin.pin1 = two_pin.path.front();
+                    two_pin.pin2 = two_pin.path.back();
+                    if (version == 2) {
+                        two_pin.done = construct_2d_tree.done_iter;
+                    }
+                    construct_2d_tree.NetDirtyBit[two_pin.net_id] = true;
+                    congestion.update_congestion_map_insert_two_pin_net(two_pin);
+                    proposal.committed = true;
+                    ++committed;
+                    continue;
+                }
+
+                two_pin.path = original_path;
+                two_pin.pin1 = original_pin1;
+                two_pin.pin2 = original_pin2;
+                congestion.update_congestion_map_insert_two_pin_net(two_pin);
+                proposal.rejected = true;
+                ++rejected;
+            }
         }
         const double commit_ms_value = profile_ms(commit_start, ProfileClock::now());
         stats = current_overflow_stats(congestion);
