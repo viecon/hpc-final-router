@@ -1715,6 +1715,103 @@ Next experiment:
   turnaround time; the router strategy and env remain the same as legal7;
 - if the probe is legal and not slow, rerun legal7.
 
+### v8.11 Smoke, Failure Probe, And v8.12 Direction
+
+Smoke run:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_60dbb0c_smoke_easyhard_emerg_edge_2x7t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.11 | smoke, 7 OpenMP threads | `newblue2` | 81.201087 | 76.516170 | 0.942x | 1.158 | 0 / 0 | legal, not faster |
+| v8.11 | smoke, 7 OpenMP threads | `adaptec4` | 135.866790 | 130.666544 | 0.962x | 1.111 | 0 / 0 | legal, not faster |
+
+Targeted `bigblue1` guard:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_60dbb0c_bigblue1_emerg_edge_14t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.11 | emergency edge oversubscribe, 14 threads | `bigblue1` | 348.062577 | 1206.306768 | 3.466x | 1.241 | 36902 / 8 | rejected, original-legal row failed |
+
+Evidence and classification:
+
+- CPU utilization was healthy, about 9-10 cores on a 14-thread router process.
+- `edge_oversubscribe=1` worked: selected candidates rose from the v8.10
+  failure's roughly 5k tail selections to roughly 23k-27k per emergency phase.
+- The repair still plateaued near 40k internal overflow during emergency P2.
+  After post-processing, internal 2D overflow reached only 18451 and the Lab2
+  checker reported 36902 total overflow.
+- The problem is no longer only candidate scheduling.  The fast proposal loop
+  needs stronger convergence/negotiation at the residual tail.
+
+Literature mapping for the next probe:
+
+- NCTU-GR 2.0 uses task-based collision-aware parallel routing with
+  bounded-length maze routing, and reports parallel speedup without changing
+  the final legality target.  Reference: DAC 2010,
+  DOI `10.1145/1837274.1837324`.
+- Shintani et al. route-search/area-update separates parallel search from
+  exclusive update, then cancels/reroutes candidates that violate congestion.
+  Reference: DSD 2013, DOI `10.1109/DSD.2013.70`.
+- SPRoute observes that fixed high net-level parallelism can livelock, so it
+  lowers parallelism and eventually uses finer-grain work to guarantee
+  convergence.  Reference: ICCAD 2019, DOI `10.1109/ICCAD45719.2019.8942105`.
+- SPRoute 2.0 emphasizes deterministic batched routing and soft capacity.
+  Reference: ASP-DAC 2022 program/PDF.
+
+v8.12 probe direction:
+
+- keep the high-parallel proposal front end;
+- enable stronger deterministic/global acceptance only after measured overflow
+  enters a residual tail;
+- do not branch on benchmark names;
+- classify any slow probe above the 3x gate as rejected.
+
+Low-tail probe:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_60dbb0c_bigblue1_globaltail25k_14t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.12 probe A | global commit limit 25k, low-tail self-ripup 25k | `bigblue1` | 594.909129 | 1206.306768 | 2.028x | 1.243 | 25006 / 8 | rejected, improves overflow but still illegal |
+
+Key evidence:
+
+```text
+v8 low-tail self-ripup ... total_overflow=23672 -> 20251
+...
+v8 low-tail self-ripup ... total_overflow=12503
+Lab2 checker total_overflow=25006 max_overflow=8
+```
+
+Classification:
+
+- This is a real convergence improvement but insufficient for legality.
+- The extra deterministic/global tail costs about 247 seconds over v8.11 on
+  `bigblue1`, reducing speedup from 3.466x to 2.028x.
+- The residual 2D overflow remains too high for 3D legality; simply increasing
+  low-tail self-ripup is likely to keep paying seconds for diminishing returns.
+
+Invalid final-full probe:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_60dbb0c_bigblue1_finalfull50k12_14t
+```
+
+Result matched v8.11 because the runner still hardcoded
+`NTHU_FINAL_FULL_REMAINDER_REPAIR_LIMIT=80`; only the rounds override was
+passed through.  This probe is classified as a support-script error, not an
+algorithm result.  The guard/smoke helpers were updated so
+`V8_FINAL_FULL_REMAINDER_REPAIR_LIMIT` now controls the v8 strategy's
+`NTHU_FINAL_FULL_REMAINDER_REPAIR_LIMIT`.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:
