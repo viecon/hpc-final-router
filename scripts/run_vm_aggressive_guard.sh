@@ -15,6 +15,9 @@ STRATEGY=${STRATEGY:-frontier_edgecount_netguided_v2}
 PARALLEL_BENCH_JOBS=${PARALLEL_BENCH_JOBS:-7}
 SKIP_BUILD=${SKIP_BUILD:-1}
 JOBS=${JOBS:-14}
+ROUTER_THREADS=${ROUTER_THREADS:-1}
+ROUTER_OPENMP=${ROUTER_OPENMP:-OFF}
+ROUTER_CUDA=${ROUTER_CUDA:-OFF}
 
 mkdir -p "$RESULT_DIR"
 
@@ -164,6 +167,45 @@ case "$STRATEGY" in
       NTHU_FINAL_FULL_REMAINDER_REPAIR_ROUNDS=6
     )
     ;;
+  frontier_openmp_conflict_batch_v5)
+    strategy_args="--p2-init-box-size=5 --p2-box-expand-size=5 --overflow-threshold=10000 --p2-max-iteration=5 --p3-max-iteration=2 --p3-init-box-size=54 --p3-box-expand-size=88"
+    strategy_env=(
+      NTHU_FAST_GREEDY_LAYER=1
+      NTHU_FAST_GREEDY_LAYER_NET_GUIDED=1
+      NTHU_NET_GUIDED_LOW_LAYER_FIRST=1
+      NTHU_DOGLEG_FASTPATH=1
+      NTHU_DOGLEG_MAX_EXTRA=0
+      NTHU_DOGLEG_MIN_SCORE=1
+      NTHU_DOGLEG_STEP=8
+      NTHU_RANGE_SKIP_REMAINDER=1
+      NTHU_REROUTE_SCORE_P2_ONLY=1
+      NTHU_REROUTE_MIN_OVERFLOW_SCORE=5
+      NTHU_REROUTE_LATE_SCORE_AFTER_ITER=4
+      NTHU_REROUTE_LATE_MIN_OVERFLOW_SCORE=1
+      NTHU_POST_SORT_MODE=edge_count
+      NTHU_POST_OVERFLOW_LIMIT_AFTER_FIRST=240
+      NTHU_ADAPTIVE_LEGAL_REPAIR=1
+      NTHU_ADAPTIVE_POST_ONLY_OVERFLOW_LIMIT=10
+      NTHU_ADAPTIVE_REPAIR_P2_MAX_ITER=8
+      NTHU_ADAPTIVE_HIGH_OVERFLOW_P2_TRIGGER=200
+      NTHU_ADAPTIVE_HIGH_OVERFLOW_P2_MAX_ITER=16
+      NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_LIMIT=50
+      NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
+      NTHU_ADAPTIVE_INITIAL_P3_MAX_ITER=2
+      NTHU_ADAPTIVE_INITIAL_P3_INIT_BOX=54
+      NTHU_ADAPTIVE_INITIAL_P3_BOX_INC=88
+      NTHU_ADAPTIVE_REPAIR_P3_MAX_ITER=12
+      NTHU_ADAPTIVE_REPAIR_P3_INIT_BOX=66
+      NTHU_ADAPTIVE_REPAIR_P3_BOX_INC=122
+      NTHU_FINAL_FULL_REMAINDER_REPAIR_LIMIT=80
+      NTHU_FINAL_FULL_REMAINDER_REPAIR_ROUNDS=6
+      NTHU_PARALLEL_REROUTE_BATCHES=1
+      NTHU_PARALLEL_REROUTE_BATCH_LIMIT=${OPENMP_BATCH_LIMIT:-4}
+      NTHU_PARALLEL_REROUTE_MAX_CANDIDATES=${OPENMP_MAX_CANDIDATES:-512}
+      NTHU_PARALLEL_REROUTE_LOG=1
+      NTHU_PROFILE=1
+    )
+    ;;
   *)
     echo "unknown STRATEGY=$STRATEGY" >&2
     exit 2
@@ -179,6 +221,9 @@ esac
   echo "bench_set=$BENCH_SET"
   echo "strategy=$STRATEGY"
   echo "parallel_bench_jobs=$PARALLEL_BENCH_JOBS"
+  echo "router_threads=$ROUTER_THREADS"
+  echo "router_openmp=$ROUTER_OPENMP"
+  echo "router_cuda=$ROUTER_CUDA"
   echo "strategy_args=$strategy_args"
   echo "strategy_env=${strategy_env[*]}"
   echo
@@ -224,11 +269,12 @@ run_one_guard() {
       BENCH_DIR="$BENCH_DIR" \
       BENCH_LIST="$bench_list" \
       EVALUATOR=lab2 \
-      NTHU_OPENMP=OFF \
-      NTHU_CUDA=OFF \
+      NTHU_OPENMP="$ROUTER_OPENMP" \
+      NTHU_CUDA="$ROUTER_CUDA" \
       SKIP_BUILD="$SKIP_BUILD" \
       JOBS="$JOBS" \
       PARALLEL_BENCH_JOBS=1 \
+      OMP_NUM_THREADS="$ROUTER_THREADS" \
       NTHU_EXTRA_ARGS="$strategy_args" \
       bash scripts/run_nthu_ispd08.sh \
       > "$bench_result_dir/runner.log" 2>&1

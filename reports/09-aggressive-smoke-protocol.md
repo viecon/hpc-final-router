@@ -383,6 +383,114 @@ The remaining failures are low-overflow residuals, so allowing low-score late
 reroutes and more post candidates should restore legality with less cost than
 returning to the heavier `prev_final` P3 budget.
 
+### v4 Smoke Result
+
+Result root:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_late_score1_v4_7cc5fdc_20260606T234222Z
+```
+
+| Strategy | Role | Benchmark | Seconds | Speedup vs original | WL ratio | Overflow |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `frontier_adaptive_late_score1_v4` | easy | `newblue2` | 41.127 | 1.860x | 1.159 | 0 / 0 |
+| `frontier_adaptive_late_score1_v4` | hard | `adaptec4` | 89.638 | 1.458x | 1.110 | 0 / 0 |
+
+Classification:
+
+- v4 smoke remains legal and is not slower than v3 in any meaningful way.
+- This validates the support-policy change on the smoke pair only; legal7 is
+  still the correctness gate because v3's failures were on `adaptec1` and
+  `newblue6`, not the smoke pair.
+
+### v4 Legal7 Guard Result
+
+Result root:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_late_score1_v4_legal7_7cc5fdc_20260606T234646Z
+```
+
+| Benchmark | Seconds | Speedup vs original | WL ratio | Overflow |
+| --- | ---: | ---: | ---: | ---: |
+| `adaptec1` | 367.382 | 1.203x | 1.137 | 0 / 0 |
+| `adaptec3` | 289.303 | 1.656x | 1.130 | 0 / 0 |
+| `adaptec4` | 100.058 | 1.306x | 1.110 | 0 / 0 |
+| `adaptec5` | 887.325 | 1.398x | 1.108 | 0 / 0 |
+| `bigblue1` | 672.508 | 1.794x | 1.128 | 0 / 0 |
+| `newblue2` | 49.478 | 1.546x | 1.159 | 0 / 0 |
+| `newblue6` | 1166.294 | 2.811x | 1.099 | 0 / 0 |
+
+Aggregate:
+
+| Metric | Value |
+| --- | ---: |
+| Legal rows | `7 / 7` |
+| Original-legal guard | `7 / 7` |
+| Timeouts | `0` |
+| Original seconds | `6853.445` |
+| Candidate seconds | `3532.347` |
+| Suite speedup | `1.940x` |
+
+Classification:
+
+- v4 is the first aggressive frontier in this run that passes the original-legal
+  `legal7` gate.
+- It is slower than illegal v3 (`2.353x`) because `newblue6` needs late P2
+  iterations through 16 before post-processing can remove the residual overflow.
+  The run is still faster than the prior legal `prev_final` legal7 aggregate
+  recorded earlier (`1.752x`).
+- The fix is a support-policy change, not a new benchmark-specific branch:
+  all legal7 rows use the same routing config.
+- Next step: test whether in-process OpenMP conflict batching can recover some
+  runtime without changing v4's legality policy.
+
+### v5 OpenMP Conflict-Batch Candidate
+
+Implementation hook:
+
+```text
+frontier_openmp_conflict_batch_v5
+```
+
+Planned change:
+
+- keep the v4 routing parameters unchanged;
+- enable `NTHU_PARALLEL_REROUTE_BATCHES=1`;
+- run an OpenMP build with `ROUTER_OPENMP=ON` and a fixed
+  `ROUTER_THREADS` value;
+- use conflict-box batching inside `RangeRouter::route_twopin_candidates()`;
+- record profile logs (`NTHU_PROFILE=1`, `NTHU_PARALLEL_REROUTE_LOG=1`) so
+  the result can be classified as useful parallelism vs serialization overhead.
+
+Why this is a separate experiment:
+
+- The current single-process reroute path removes and reinserts each old route
+  into the shared congestion map.  Therefore, parallelizing all overflow
+  two-pin nets with a raw `omp parallel for` is not safe.
+- The available implementation instead batches nets whose conservative
+  conflict boxes do not overlap.  This is close in spirit to collision-aware
+  task scheduling in NCTU-GR 2.0 and the route-search / exclusive-commit idea
+  in the overlapped-region parallel routing paper, but this implementation is
+  more conservative because it still mutates the real congestion map during
+  each accepted candidate route.
+- If smoke is more than 3x slower than original, the timeout gate kills the run
+  and the logs are used to classify whether the cause is implementation/support
+  overhead or a rejected optimization direction.
+
+References used for this experiment design:
+
+- Wen-Hao Liu et al., "NCTU-GR 2.0: Multithreaded Collision-Aware Global
+  Routing with Bounded-Length Maze Routing", DAC 2010,
+  DOI: `10.1145/1837274.1837324`.
+  <https://www.researchgate.net/publication/221060550_NCTU-GR_20_Multithreaded_Collision-Aware_Global_Routing_with_Bounded-Length_Maze_Routing>
+- Yasuhiro Shintani et al., "A Multithreaded Parallel Global Routing Method
+  with Overlapped Routing Regions", DSD 2013, DOI: `10.1109/DSD.2013.70`.
+  <https://www.researchgate.net/publication/262361280_A_Multithreaded_Parallel_Global_Routing_Method_with_Overlapped_Routing_Regions>
+- Jiayuan He et al., "SPRoute: A Scalable Parallel Negotiation-Based Global
+  Router", ICCAD 2019, DOI: `10.1109/ICCAD45719.2019.8942105`.
+  <https://eurekamag.com/research/102/862/102862952.php>
+
 ## Guard Expansion: original-legal legal7
 
 Helper:
