@@ -77,6 +77,23 @@ case "$BENCH_SET" in
     ;;
 esac
 
+if [[ -n "${BENCH_LIST_OVERRIDE:-}" ]]; then
+  override_benches=()
+  read -r -a override_tokens <<< "${BENCH_LIST_OVERRIDE//,/ }"
+  for bench_entry in "${override_tokens[@]}"; do
+    [[ -z "$bench_entry" ]] && continue
+    if [[ "$bench_entry" != *.gr ]]; then
+      bench_entry="${bench_entry}.gr"
+    fi
+    override_benches+=("$bench_entry")
+  done
+  if [[ "${#override_benches[@]}" -eq 0 ]]; then
+    echo "BENCH_LIST_OVERRIDE was set but no benchmarks were parsed" >&2
+    exit 2
+  fi
+  benches=("${override_benches[@]}")
+fi
+
 printf '%s\n' "${benches[@]}" > "$RESULT_DIR/bench.list"
 
 case "$STRATEGY" in
@@ -348,6 +365,7 @@ case "$STRATEGY" in
       NTHU_V8_EMERGENCY_DIRECT_LIMIT=${V8_EMERGENCY_DIRECT_LIMIT:-32768}
       NTHU_V8_EMERGENCY_PROPOSAL_MAX_CANDIDATES=${V8_EMERGENCY_PROPOSAL_MAX_CANDIDATES:-32768}
       NTHU_V8_EMERGENCY_PROPOSAL_BATCH_SIZE=${V8_EMERGENCY_PROPOSAL_BATCH_SIZE:-8192}
+      NTHU_V8_EMERGENCY_EDGE_OVERSUBSCRIBE=${V8_EMERGENCY_EDGE_OVERSUBSCRIBE:-1}
       NTHU_V8_DIRECT_ROUTE_ALL=1
       NTHU_V8_DIRECT_ROUTE_ALL_LOG=1
       NTHU_V8_DIRECT_ROUTE_ALL_LIMIT=${V8_DIRECT_ROUTE_ALL_LIMIT:-16384}
@@ -406,6 +424,7 @@ esac
   echo "git_head=$(git rev-parse --short HEAD || true)"
   echo "result_dir=$RESULT_DIR"
   echo "bench_set=$BENCH_SET"
+  echo "bench_list_override=${BENCH_LIST_OVERRIDE:-}"
   echo "strategy=$STRATEGY"
   echo "parallel_bench_jobs=$PARALLEL_BENCH_JOBS"
   echo "router_threads=$ROUTER_THREADS"

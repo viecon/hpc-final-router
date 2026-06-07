@@ -1656,6 +1656,65 @@ Decision:
   trigger early emergency and kept the fast-path speed;
 - rerun `legal7` with the promoted default.
 
+### v8.10 Legal7 Abort And v8.11 Scheduler Fix
+
+Legal7 run:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_5daaec9_legal7_early_emergency_p2x48_2x7t
+```
+
+Partial result before abort:
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.10 | 2 jobs x 7 threads, early emergency P2 max 48 | `adaptec1` | 395.146402 | 441.962666 | 1.118x | 1.221 | 0 / 0 | legal |
+| v8.10 | same | `adaptec3` | 362.617606 | 479.186273 | 1.321x | 1.144 | 0 / 0 | legal |
+| v8.10 | same | `adaptec4` | 152.954350 | 130.666544 | 0.854x | 1.111 | 0 / 0 | legal but slower under 2x7t |
+| v8.10 | same | `bigblue1` | killed after max iter evidence | 1206.306768 | n/a | n/a | internal 12417 / 6 | rejected, original-legal row failed |
+
+Key `bigblue1` evidence:
+
+```text
+v8 early emergency repair enabled: overflow=61512 trigger=30000 current_iter=5 max_iter=48
+proposal reroute phase ... hot_pool_scanned=184844 selected=4974 conflict_skipped=179870 proposed=4360 committed=469 ... low_overflow=12251
+cal max overflow= 6 cur_cap-max_cap= 12417
+```
+
+Classification:
+
+- Not a timeout: `bigblue1` was still far below its 3x-original gate.
+- Not a crash or build issue: CPU utilization stayed around six cores per
+  7-thread router process.
+- This is a scheduler-policy failure in the v8.10 support logic.  During
+  high-residual emergency repair, collision-aware selection was too
+  conservative: most hot candidates were skipped because overuse-1 edges were
+  limited to one selected proposal per round.
+
+v8.11 design:
+
+- keep the same fast path and the same early emergency trigger;
+- add `NTHU_V8_EMERGENCY_EDGE_OVERSUBSCRIBE`, enabled by default only for
+  `frontier_v8_direct_proposal`;
+- when emergency repair is active, allow overflow-edge selection up to
+  `NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA` even if the current overuse is
+  only 1;
+- keep deterministic/exclusive commit unchanged, so unsafe proposals are still
+  rejected against the shared congestion map;
+- this follows the collision-aware task scheduling direction from NCTU-GR and
+  the proposal/commit direction from deterministic batch routers, but does not
+  use benchmark names or benchmark-family switches.
+
+Next experiment:
+
+- rebuild on VM after pushing v8.11;
+- run the normal easy+hard smoke;
+- run a `bigblue1` failure probe because the new flag is emergency-only and
+  the easy/hard smoke may not exercise it;
+- use the guard helper's `BENCH_LIST_OVERRIDE` only to reduce experiment
+  turnaround time; the router strategy and env remain the same as legal7;
+- if the probe is legal and not slow, rerun legal7.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:

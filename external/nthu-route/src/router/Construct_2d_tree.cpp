@@ -56,6 +56,14 @@ bool v8_emergency_repair_enabled() {
     return std::getenv("NTHU_V8_EMERGENCY_REPAIR") != nullptr;
 }
 
+bool v8_emergency_edge_oversubscribe_enabled() {
+    const char* value = std::getenv("NTHU_V8_EMERGENCY_EDGE_OVERSUBSCRIBE");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
 int adaptive_direct_overflow_limit() {
     return std::max(0, env_int("NTHU_ADAPTIVE_DIRECT_OVERFLOW_LIMIT", 0));
 }
@@ -750,6 +758,7 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
     v8_direct_route_all_limit_override = 0;
     v8_proposal_max_candidates_override = 0;
     v8_proposal_batch_size_override = 0;
+    v8_proposal_edge_oversubscribe_override = false;
     /***********************
      * Global Variable End
      * ********************/
@@ -901,6 +910,8 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
             int old_direct_limit_override = v8_direct_route_all_limit_override;
             int old_proposal_max_override = v8_proposal_max_candidates_override;
             int old_proposal_batch_override = v8_proposal_batch_size_override;
+            bool old_proposal_edge_oversubscribe_override =
+                    v8_proposal_edge_oversubscribe_override;
             const int early_emergency_trigger =
                     std::max(0, env_int("NTHU_V8_EMERGENCY_EARLY_TRIGGER", 0));
             if (v8_emergency_repair_enabled() && early_emergency_trigger > 0 &&
@@ -912,15 +923,18 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
                         std::max(1, env_int("NTHU_V8_EMERGENCY_PROPOSAL_MAX_CANDIDATES", 32768));
                 v8_proposal_batch_size_override =
                         std::max(1, env_int("NTHU_V8_EMERGENCY_PROPOSAL_BATCH_SIZE", 8192));
+                v8_proposal_edge_oversubscribe_override =
+                        v8_emergency_edge_oversubscribe_enabled();
                 const int emergency_max_iter =
                         env_int("NTHU_V8_EMERGENCY_P2_MAX_ITER", adaptive_max_iter);
                 if (emergency_max_iter > adaptive_max_iter) {
                     adaptive_max_iter = emergency_max_iter;
                 }
-                log_sp->info("v8 early emergency repair enabled: overflow={} trigger={} current_iter={} max_iter={} direct_limit={} proposal_max={} proposal_batch={}",
+                log_sp->info("v8 early emergency repair enabled: overflow={} trigger={} current_iter={} max_iter={} direct_limit={} proposal_max={} proposal_batch={} edge_oversubscribe={}",
                         cur_overflow, early_emergency_trigger, current_iter, adaptive_max_iter,
                         v8_direct_route_all_limit_override, v8_proposal_max_candidates_override,
-                        v8_proposal_batch_size_override);
+                        v8_proposal_batch_size_override,
+                        v8_proposal_edge_oversubscribe_override ? 1 : 0);
             }
 
             log_sp->info("adaptive legal repair enabled: overflow={} trigger={} current_iter={} max_iter={}",
@@ -984,6 +998,8 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
                 v8_direct_route_all_limit_override = old_direct_limit_override;
                 v8_proposal_max_candidates_override = old_proposal_max_override;
                 v8_proposal_batch_size_override = old_proposal_batch_override;
+                v8_proposal_edge_oversubscribe_override =
+                        old_proposal_edge_oversubscribe_override;
             }
             output_2_pin_list();
             post_processing.process(route_2pinnets);
@@ -1105,6 +1121,8 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
                 const int old_direct_limit_override = v8_direct_route_all_limit_override;
                 const int old_proposal_max_override = v8_proposal_max_candidates_override;
                 const int old_proposal_batch_override = v8_proposal_batch_size_override;
+                const bool old_proposal_edge_oversubscribe_override =
+                        v8_proposal_edge_oversubscribe_override;
                 const bool old_force_direct = force_direct_overflow_candidates;
                 const bool old_force_remainder = force_route_remainder;
 
@@ -1114,11 +1132,14 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
                         std::max(1, env_int("NTHU_V8_EMERGENCY_PROPOSAL_MAX_CANDIDATES", 32768));
                 v8_proposal_batch_size_override =
                         std::max(1, env_int("NTHU_V8_EMERGENCY_PROPOSAL_BATCH_SIZE", 8192));
+                v8_proposal_edge_oversubscribe_override =
+                        v8_emergency_edge_oversubscribe_enabled();
 
-                log_sp->info("v8 emergency repair enabled: overflow={} trigger={} current_iter={} max_iter={} direct_limit={} proposal_max={} proposal_batch={}",
+                log_sp->info("v8 emergency repair enabled: overflow={} trigger={} current_iter={} max_iter={} direct_limit={} proposal_max={} proposal_batch={} edge_oversubscribe={}",
                         cur_overflow, emergency_trigger, congestion.cur_iter, emergency_max_iter,
                         v8_direct_route_all_limit_override, v8_proposal_max_candidates_override,
-                        v8_proposal_batch_size_override);
+                        v8_proposal_batch_size_override,
+                        v8_proposal_edge_oversubscribe_override ? 1 : 0);
 
                 force_direct_overflow_candidates = true;
                 force_route_remainder = false;
@@ -1174,6 +1195,8 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
                 v8_direct_route_all_limit_override = old_direct_limit_override;
                 v8_proposal_max_candidates_override = old_proposal_max_override;
                 v8_proposal_batch_size_override = old_proposal_batch_override;
+                v8_proposal_edge_oversubscribe_override =
+                        old_proposal_edge_oversubscribe_override;
 
                 output_2_pin_list();
                 post_processing.process(route_2pinnets);

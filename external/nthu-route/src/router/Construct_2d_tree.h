@@ -83,6 +83,7 @@ struct Construct_2d_tree {
     int v8_direct_route_all_limit_override;
     int v8_proposal_max_candidates_override;
     int v8_proposal_batch_size_override;
+    bool v8_proposal_edge_oversubscribe_override;
     std::vector<TreeFlute> net_flutetree;
 
     std::vector<bool> NetDirtyBit;
