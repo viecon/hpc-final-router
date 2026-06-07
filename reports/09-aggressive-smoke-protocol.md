@@ -3356,3 +3356,181 @@ Classification:
 - Next probe: expose and enable strict-repair no-progress rollback, then try a
   moderate high-overflow strict threshold rather than the earlier v8.40 50k
   setting.
+
+v8.55 high-threshold strict repair with no-progress rollback:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_b7e2035_smoke_easyhard_txwaves_highstrict20k_v8_55_openmp14t
+commit=b7e2035
+NTHU_V8_TRANSACTIONAL_PROPOSAL_WAVES=1
+NTHU_V8_STRICT_LEGAL_REPAIR_MAX_OVERFLOW=20000
+NTHU_V8_STRICT_LEGAL_REPAIR_MAX_CANDIDATES=4096
+NTHU_V8_STRICT_LEGAL_REPAIR_BATCH_SIZE=512
+NTHU_V8_STRICT_LEGAL_REPAIR_EDGE_QUOTA=8
+NTHU_V8_STRICT_LEGAL_REPAIR_DYNAMIC_EDGE_QUOTA=1
+NTHU_V8_STRICT_REPAIR_ALLOW_SAME_NET=1
+NTHU_V8_STRICT_ROLLBACK_NO_PROGRESS=1
+NTHU_V8_STRICT_SNAPSHOT_GLOBAL_GATE=1
+NTHU_V8_STRICT_SNAPSHOT_BURST_TOTAL=64
+NTHU_V8_STRICT_SNAPSHOT_BURST_MAX=1
+NTHU_V8_LOW_TAIL_POST_ONLY=1
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT=512
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.55 | `newblue2` | 89.729241 | 76.516170 | 0.853x | 8812825 | 1.160x | 0 / 0 | legal but slow |
+| v8.55 | `adaptec4` | timeout at 392 | 130.666544 | <0.333x | NA | NA | 1350 / 6 before timeout | rejected; timeout |
+
+Evidence:
+
+```text
+newblue2:
+  low-tail global repair and self-ripup cleared the residual overflow.
+adaptec4 before timeout:
+  total_overflow remained around 675, max_overflow around 7
+  2D sum overflow=1350, 2D max overflow=14
+  3D # of overflow=1350, 3D max overflow=6
+```
+
+Classification:
+
+- Raising strict repair to 20k fixed `newblue2` and moved `adaptec4` into a
+  low-tail failure mode instead of the previous high-overflow failure mode.
+- The low-tail limit of 512 is too small for hard rows because `adaptec4`
+  reached post/P3 with roughly 675 residual overflow.
+- No-progress rollback prevents some bad lateral moves, but it also limits
+  tail exploration when the remaining congested edges require coordinated
+  displacement.
+
+v8.56 high-threshold strict repair with lateral snapshot commits:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_b7e2035_smoke_easyhard_highstrict50k_lateral_lowtail1024_v8_56_openmp14t
+commit=b7e2035
+NTHU_V8_TRANSACTIONAL_PROPOSAL_WAVES=1
+NTHU_V8_STRICT_LEGAL_REPAIR_MAX_OVERFLOW=50000
+NTHU_V8_STRICT_LEGAL_REPAIR_MAX_CANDIDATES=8192
+NTHU_V8_STRICT_LEGAL_REPAIR_BATCH_SIZE=1024
+NTHU_V8_STRICT_LEGAL_REPAIR_EDGE_QUOTA=12
+NTHU_V8_STRICT_LEGAL_REPAIR_DYNAMIC_EDGE_QUOTA=1
+NTHU_V8_STRICT_REPAIR_ALLOW_SAME_NET=1
+NTHU_V8_STRICT_ROLLBACK_NO_PROGRESS=0
+NTHU_V8_STRICT_SNAPSHOT_GLOBAL_GATE=1
+NTHU_V8_STRICT_SNAPSHOT_BURST_TOTAL=512
+NTHU_V8_STRICT_SNAPSHOT_BURST_MAX=4
+NTHU_V8_LOW_TAIL_POST_ONLY=1
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT=1024
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_MAX_CANDIDATES=2048
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_ROUNDS=12
+NTHU_V8_LOW_TAIL_SELF_RIPUP_MAX_TESTS=512
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.56 | `newblue2` | 93.797912 | 76.516170 | 0.816x | 8800505 | 1.159x | 0 / 0 | legal but slow |
+| v8.56 | `adaptec4` | 322.010646 | 130.666544 | 0.406x | 13568536 | 1.111x | 0 / 0 | legal but slow |
+
+Evidence:
+
+```text
+newblue2:
+  high strict repair reduced 42000+ overflow to 14000+, then to 5900+
+  low-tail global repair: 546 -> 67
+  self-ripup: 67 -> 8
+  second low-tail phase: 8 -> 0
+adaptec4:
+  strict repair: 32935 -> 10805
+  low-tail global repair: 870 -> 233 -> about 206
+  self-ripup and final proposal/tail phases: 206 -> 51 -> 38 -> 1 -> 0
+aggregate:
+  legal=2/2
+  original_legal_guard=2/2
+  candidate_seconds=415.808558
+  suite_speedup=0.498x
+```
+
+Classification:
+
+- This is the first current v8 smoke config that is legal on both the easy and
+  hard smoke rows.
+- It is rejected for performance: the larger lateral snapshot window clears
+  legality, but `adaptec4` spends a long time oscillating in low overflow
+  states before the final tail clears.
+- The result matches the SPRoute warning that fixed aggressive parallelism can
+  livelock or oscillate unless the router adapts batch size and conflict policy
+  as convergence slows.
+
+v8.57 high-threshold strict repair with conservative rollback:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_b7e2035_smoke_easyhard_highstrict50k_rollback_lowtail1024_v8_57_openmp14t
+commit=b7e2035
+NTHU_V8_TRANSACTIONAL_PROPOSAL_WAVES=1
+NTHU_V8_STRICT_LEGAL_REPAIR_MAX_OVERFLOW=50000
+NTHU_V8_STRICT_LEGAL_REPAIR_MAX_CANDIDATES=4096
+NTHU_V8_STRICT_LEGAL_REPAIR_BATCH_SIZE=512
+NTHU_V8_STRICT_LEGAL_REPAIR_EDGE_QUOTA=8
+NTHU_V8_STRICT_LEGAL_REPAIR_DYNAMIC_EDGE_QUOTA=1
+NTHU_V8_STRICT_REPAIR_ALLOW_SAME_NET=1
+NTHU_V8_STRICT_ROLLBACK_NO_PROGRESS=1
+NTHU_V8_STRICT_SNAPSHOT_GLOBAL_GATE=1
+NTHU_V8_STRICT_SNAPSHOT_BURST_TOTAL=64
+NTHU_V8_STRICT_SNAPSHOT_BURST_MAX=1
+NTHU_V8_LOW_TAIL_POST_ONLY=1
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT=1024
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_MAX_CANDIDATES=2048
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_ROUNDS=12
+NTHU_V8_LOW_TAIL_SELF_RIPUP_MAX_TESTS=512
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.57 | `newblue2` | 74.695821 | 76.516170 | 1.024x | 8817946 | 1.161x | 0 / 0 | legal and faster |
+| v8.57 | `adaptec4` | timeout at 392 | 130.666544 | <0.333x | NA | NA | about 544 / 8 before timeout | rejected; timeout |
+
+Evidence:
+
+```text
+newblue2:
+  legal and slightly faster than original on wall time.
+adaptec4:
+  repeated strict phases stabilized around total_overflow=659, max_overflow=8
+  low-tail global repair near timeout: about 659 -> 544
+  low-tail global proposal_ms=11887.073, commit_ms=39167.066
+  timeout occurred before self-ripup could finish the remaining tail
+aggregate:
+  legal=1/2
+  candidate_seconds=466.695821
+  suite_speedup=0.444x
+```
+
+CPU utilization note:
+
+```text
+The early startup/build region still appears close to one full CPU.
+During proposal-heavy regions, ps sampling showed roughly 5.1x to 7.1x CPU,
+with 14 OpenMP threads present.
+The remaining utilization loss is concentrated in deterministic commit,
+global-gate checks, and low-tail commit, which are serial-heavy and
+memory/cache sensitive.
+```
+
+Classification:
+
+- Conservative rollback is useful for easy rows: `newblue2` is legal and
+  slightly faster than original.
+- It is still rejected as an overall method because the same rollback policy
+  starves hard low-tail progress. The hard row reaches a small residual
+  overflow but low-tail is entered too late, and the global tail commit is too
+  expensive.
+- Next probe: keep the v8.57 rollback safety for normal strict repair, but
+  enter low-tail earlier and reduce global tail candidate volume. Move more of
+  the final clearing work to self-ripup, which is better targeted for the
+  remaining few overflow edges.
