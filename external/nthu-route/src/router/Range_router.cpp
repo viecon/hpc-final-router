@@ -1055,6 +1055,12 @@ struct OverflowStats {
     int total_overflow = 0;
 };
 
+struct AffectedOverflowEdge {
+    NTHUR::Coordinate_2d from;
+    NTHUR::Coordinate_2d to;
+    int before_overflow = 0;
+};
+
 OverflowStats current_overflow_stats(const NTHUR::Congestion& congestion) {
     OverflowStats stats;
     for (const NTHUR::Edge_2d& edge : congestion.congestionMap2d.all()) {
@@ -1063,6 +1069,44 @@ OverflowStats current_overflow_stats(const NTHUR::Congestion& congestion) {
         stats.total_overflow += overuse;
     }
     return stats;
+}
+
+void collect_affected_overflow_edges(const std::vector<NTHUR::Coordinate_2d>& path,
+        const NTHUR::Congestion& congestion,
+        std::vector<AffectedOverflowEdge>& edges,
+        std::unordered_set<std::uint64_t>& seen_edges) {
+    for (int path_index = static_cast<int>(path.size()) - 2; path_index >= 0; --path_index) {
+        const NTHUR::Coordinate_2d& from = path[path_index];
+        const NTHUR::Coordinate_2d& to = path[path_index + 1];
+        if (!seen_edges.insert(route_edge_key(from, to)).second) {
+            continue;
+        }
+        const NTHUR::Edge_2d& edge = congestion.congestionMap2d.edge(from, to);
+        edges.push_back(AffectedOverflowEdge {
+                from, to, std::max(0, edge.overUsage()) });
+    }
+}
+
+OverflowStats affected_overflow_stats(const NTHUR::Congestion& congestion,
+        const std::vector<AffectedOverflowEdge>& affected_edges) {
+    OverflowStats stats;
+    for (const AffectedOverflowEdge& affected : affected_edges) {
+        const NTHUR::Edge_2d& edge =
+                congestion.congestionMap2d.edge(affected.from, affected.to);
+        const int overuse = std::max(0, edge.overUsage());
+        stats.max_overflow = std::max(stats.max_overflow, overuse);
+        stats.total_overflow += overuse;
+    }
+    return stats;
+}
+
+int affected_overflow_before_total(
+        const std::vector<AffectedOverflowEdge>& affected_edges) {
+    int total = 0;
+    for (const AffectedOverflowEdge& affected : affected_edges) {
+        total += affected.before_overflow;
+    }
+    return total;
 }
 
 void collect_overflow_net_ids(const NTHUR::Congestion& congestion, std::vector<int>& net_ids) {
@@ -2464,6 +2508,8 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
             committed = 0;
             rejected = 0;
             global_gated = true;
+            std::vector<AffectedOverflowEdge> affected_edges;
+            std::unordered_set<std::uint64_t> affected_seen;
             for (RerouteProposal& proposal : proposals) {
                 proposal.committed = false;
                 proposal.rejected = false;
@@ -2481,6 +2527,22 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
                 const std::vector<Coordinate_2d> original_path(two_pin.path);
                 const Coordinate_2d original_pin1 = two_pin.pin1;
                 const Coordinate_2d original_pin2 = two_pin.pin2;
+
+                affected_edges.clear();
+                affected_seen.clear();
+                const std::size_t affected_reserve =
+                        original_path.size() + proposal.path.size();
+                if (affected_edges.capacity() < affected_reserve) {
+                    affected_edges.reserve(affected_reserve);
+                }
+                affected_seen.reserve(affected_reserve);
+                collect_affected_overflow_edges(original_path, congestion,
+                        affected_edges, affected_seen);
+                collect_affected_overflow_edges(proposal.path, congestion,
+                        affected_edges, affected_seen);
+                const int before_affected_overflow =
+                        affected_overflow_before_total(affected_edges);
+
                 congestion.update_congestion_map_remove_two_pin_net(original_path,
                         two_pin.net_id);
 
@@ -2488,7 +2550,14 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
                 two_pin.pin1 = two_pin.path.front();
                 two_pin.pin2 = two_pin.path.back();
                 congestion.update_congestion_map_insert_two_pin_net(two_pin);
-                const OverflowStats after_stats = current_overflow_stats(congestion);
+                const OverflowStats affected_after_stats =
+                        affected_overflow_stats(congestion, affected_edges);
+                OverflowStats after_stats = stats;
+                after_stats.total_overflow +=
+                        affected_after_stats.total_overflow - before_affected_overflow;
+                after_stats.max_overflow =
+                        std::max(after_stats.max_overflow,
+                                affected_after_stats.max_overflow);
 
                 const bool improves_global =
                         after_stats.total_overflow < before_stats.total_overflow ||
