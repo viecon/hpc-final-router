@@ -809,7 +809,65 @@ Classification:
   forbid, same-edge proposals.
 - Do not run `legal7` for v7.3.
 
-v7.4 fix under test:
+v7.4 smoke result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_21ae42e_smoke_006_easy
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_21ae42e_smoke_006_hard
+```
+
+Run control:
+
+- launched as two independent background run dirs using `SMOKE_ROLES=easy` and
+  `SMOKE_ROLES=hard`;
+- easy `launcher.pid=2579970`, `launcher.pgid=2579970`;
+- hard `launcher.pid=2579977`, `launcher.pgid=2579977`;
+- each run used `ROUTER_THREADS=7`, so the pair could use up to 14 cores;
+- `newblue2` completed in `183.673020s` but failed legality;
+- because the easy row failed, the hard evaluator was stopped manually by
+  killing process groups `2580017` and `2579977`;
+- no active v7 process remained after kill.
+
+Observed `newblue2` output:
+
+| Metric | Value |
+| --- | ---: |
+| seconds | 183.673020 |
+| total_wirelength | 8788345 |
+| total_overflow | 137904 |
+| max_overflow | 60 |
+| overflowed_nets | 77138 |
+| overflowed_edges | 22444 |
+
+Key proposal diagnostic:
+
+```text
+proposal reroute phase rounds=6 hot_pool_scanned=98304 selected=10605
+proposed=3415 committed=550 rejected=2865 edge_quota=8
+proposal reroute phase rounds=6 hot_pool_scanned=49152 selected=5314
+proposed=1508 committed=10 rejected=1498 edge_quota=8
+proposal reroute phase rounds=6 hot_pool_scanned=240 selected=38
+proposed=0 committed=0 rejected=0 edge_quota=8
+```
+
+Classification:
+
+- v7.4 fixed the v7.3 under-parallel selection issue: selected candidates rose
+  from about `1509` per phase to about `10605`, and concurrent easy+hard CPU
+  use reached roughly 10 cores.
+- Legality barely improved (`148610 -> 137904` overflow on `newblue2`) while
+  runtime worsened (`61.80s -> 183.67s`).
+- The root cause is not old-edge scheduling anymore.  The proposal engine
+  generates paths on a stale congestion snapshot, then deterministic commit
+  rejects almost all candidates because the commit rule requires a fully legal
+  new path.
+- Original NTHU `range_router` does not require every intermediate reroute to
+  be zero-overflow; it removes the old path, accepts routed paths, and relies on
+  negotiation/repair rounds to converge.  v7.4 was stricter than original and
+  therefore rejected the useful intermediate moves.
+- Do not run `legal7` for v7.4.
+
+v7.5 fix under test:
 
 - keep proposal-only semantics: no serial `range_router()` fallback inside the
   v7 path;
@@ -822,7 +880,10 @@ v7.4 fix under test:
   5. commit proposals in deterministic order;
   6. stop when no proposal commits or `NTHU_PROPOSAL_REROUTE_MAX_ROUNDS` is
      reached;
-- fixed v7.2 config:
+- commit rule changes from strict zero-overflow to transactional improvement:
+  after removing the old path, accept the proposal if its inserted overflow
+  score improves by at least `NTHU_POST_ACCEPT_MIN_DELTA`;
+- fixed v7.5 config:
 
 ```text
 NTHU_PROPOSAL_REROUTE_MAX_CANDIDATES=16384
@@ -831,13 +892,13 @@ NTHU_PROPOSAL_REROUTE_MAX_ROUNDS=6
 NTHU_PROPOSAL_REROUTE_CONFLICT_AWARE=1
 NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_CONFLICT=1
 NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA=8
+NTHU_PROPOSAL_REROUTE_IMPROVEMENT_COMMIT=1
 ```
 
 Expected diagnostic:
 
-- if selected proposal count rises above v7.3 while commit rejection remains
-  bounded and overflow decreases, the issue was the over-exclusive old-edge
-  conflict rule;
+- if commit count rises sharply and overflow decreases more than v7.4, the
+  issue was the overly strict zero-overflow commit rule;
 - if proposal time or overflow still fails the smoke gate, the current
   proposal engine needs a true soft-capacity/negotiation layer before legal7
   expansion.

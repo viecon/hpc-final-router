@@ -219,6 +219,10 @@ bool proposal_reroute_overflow_edge_conflict_enabled() {
     return std::getenv("NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_CONFLICT") != nullptr;
 }
 
+bool proposal_reroute_improvement_commit_enabled() {
+    return std::getenv("NTHU_PROPOSAL_REROUTE_IMPROVEMENT_COMMIT") != nullptr;
+}
+
 int proposal_reroute_overflow_edge_quota() {
     const char* value = std::getenv("NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA");
     if (value == nullptr || *value == '\0') {
@@ -1627,12 +1631,22 @@ bool NTHUR::RangeRouter::commit_reroute_proposal(Two_pin_element_2d& two_pin,
         return false;
     }
 
+    const bool improvement_commit = proposal_reroute_improvement_commit_enabled();
+    const int old_path_overflow_score = improvement_commit ? path_overflow_score(two_pin, congestion) : 0;
     const std::vector<Coordinate_2d> original_path(two_pin.path);
     const Coordinate_2d original_pin1 = two_pin.pin1;
     const Coordinate_2d original_pin2 = two_pin.pin2;
 
     congestion.update_congestion_map_remove_two_pin_net(original_path, two_pin.net_id);
-    if (!congestion.check_path_no_overflow(proposed_path, two_pin.net_id, true)) {
+    bool accept = false;
+    if (improvement_commit) {
+        const int new_path_overflow_score =
+                inserted_path_overflow_score(proposed_path, two_pin.net_id, congestion);
+        accept = new_path_overflow_score + post_accept_min_delta() <= old_path_overflow_score;
+    } else {
+        accept = congestion.check_path_no_overflow(proposed_path, two_pin.net_id, true);
+    }
+    if (!accept) {
         two_pin.path = original_path;
         two_pin.pin1 = original_pin1;
         two_pin.pin2 = original_pin2;
@@ -1678,6 +1692,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         const int max_rounds = proposal_reroute_max_rounds();
         const bool overflow_edge_conflict = conflict_aware && proposal_reroute_overflow_edge_conflict_enabled();
         const int overflow_edge_quota = proposal_reroute_overflow_edge_quota();
+        const bool improvement_commit = proposal_reroute_improvement_commit_enabled();
 
         int total_inputs = 0;
         int total_selected = 0;
@@ -1843,12 +1858,13 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             total_commit_ms += commit_ms_value;
 
             if (do_log) {
-                log_sp->info("proposal reroute round={} hot_pool={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} edge_conflict={} edge_quota={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
+                log_sp->info("proposal reroute round={} hot_pool={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} edge_conflict={} edge_quota={} improvement_commit={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
                         proposal_round, proposal_inputs.size(), overflow_twopins.size(), conflict_skipped,
                         proposal_success, proposal_commits, proposal_rejects,
                         static_cast<int>(overflow_twopins.size()) - proposal_success,
                         conflict_aware ? 1 : 0, overflow_edge_conflict ? 1 : 0,
-                        overflow_edge_conflict ? overflow_edge_quota : 0, allow_maze ? 1 : 0,
+                        overflow_edge_conflict ? overflow_edge_quota : 0,
+                        improvement_commit ? 1 : 0, allow_maze ? 1 : 0,
                         proposal_ms_value, commit_ms_value);
             }
             if (proposal_commits == 0) {
@@ -1866,12 +1882,12 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             range_profile.proposal_skipped += total_selected - total_proposal_success;
         }
         if (do_log) {
-            log_sp->info("proposal reroute phase rounds={} hot_pool_scanned={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} edge_conflict={} edge_quota={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("proposal reroute phase rounds={} hot_pool_scanned={} selected={} conflict_skipped={} proposed={} committed={} rejected={} skipped={} conflict_aware={} edge_conflict={} edge_quota={} improvement_commit={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
                     max_rounds, total_inputs, total_selected, total_conflict_skipped,
                     total_proposal_success, total_proposal_commits, total_proposal_rejects,
                     total_selected - total_proposal_success, conflict_aware ? 1 : 0,
                     overflow_edge_conflict ? 1 : 0, overflow_edge_conflict ? overflow_edge_quota : 0,
-                    allow_maze ? 1 : 0, total_proposal_ms, total_commit_ms);
+                    improvement_commit ? 1 : 0, allow_maze ? 1 : 0, total_proposal_ms, total_commit_ms);
         }
         return;
     }
