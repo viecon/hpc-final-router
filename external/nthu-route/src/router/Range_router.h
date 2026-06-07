@@ -116,6 +116,7 @@ public:
     void query_range_2pin(const Rectangle& r, std::vector<Two_pin_element_2d*>& twopin_list, boost::multi_array<Point_fc, 2>& gridCell);
 
 private:
+    void run_v8_strict_legal_repair(std::vector<Two_pin_element_2d*>& twopin_list, int version);
     std::string printIfBound(const Rectangle& r, const Rectangle& bound, const int interval_index, const Coordinate_2d& c1, const Coordinate_2d& c2) const;
     std::string print_interval() const;
 }

@@ -307,6 +307,94 @@ bool v8_low_tail_strict_capacity_enabled() {
     return std::atoi(value) != 0;
 }
 
+bool v8_strict_legal_repair_enabled() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
+int v8_strict_legal_repair_trigger() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_TRIGGER");
+    if (value == nullptr || *value == '\0') {
+        return 1;
+    }
+    return std::max(0, std::atoi(value));
+}
+
+int v8_strict_legal_repair_max_overflow() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_MAX_OVERFLOW");
+    if (value == nullptr || *value == '\0') {
+        return std::numeric_limits<int>::max();
+    }
+    const int parsed = std::atoi(value);
+    if (parsed <= 0) {
+        return std::numeric_limits<int>::max();
+    }
+    return parsed;
+}
+
+int v8_strict_legal_repair_rounds() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_ROUNDS");
+    if (value == nullptr || *value == '\0') {
+        return 4;
+    }
+    return std::max(1, std::atoi(value));
+}
+
+int v8_strict_legal_repair_max_candidates() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_MAX_CANDIDATES");
+    if (value == nullptr || *value == '\0') {
+        return 1024;
+    }
+    const int parsed = std::atoi(value);
+    if (parsed <= 0) {
+        return std::numeric_limits<int>::max();
+    }
+    return parsed;
+}
+
+int v8_strict_legal_repair_batch_size() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_BATCH_SIZE");
+    if (value == nullptr || *value == '\0') {
+        return 256;
+    }
+    return std::max(1, std::atoi(value));
+}
+
+int v8_strict_legal_repair_edge_quota() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_EDGE_QUOTA");
+    if (value == nullptr || *value == '\0') {
+        return 1;
+    }
+    return std::max(1, std::atoi(value));
+}
+
+int v8_strict_legal_repair_base_box() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_BASE_BOX");
+    if (value == nullptr || *value == '\0') {
+        return 0;
+    }
+    return std::max(0, std::atoi(value));
+}
+
+int v8_strict_legal_repair_box_inc() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_BOX_INC");
+    if (value == nullptr || *value == '\0') {
+        return 64;
+    }
+    return std::max(0, std::atoi(value));
+}
+
+int v8_strict_legal_repair_max_no_progress() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_MAX_NO_PROGRESS");
+    if (value == nullptr || *value == '\0') {
+        return 2;
+    }
+    return std::max(1, std::atoi(value));
+}
+
 int proposal_reroute_overflow_edge_quota() {
     const char* value = std::getenv("NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA");
     if (value == nullptr || *value == '\0') {
@@ -699,6 +787,27 @@ bool find_strict_legal_maze_path(const NTHUR::Two_pin_element_2d& two_pin,
     return path.size() >= 2;
 }
 
+bool find_strict_legal_path_with_box(const NTHUR::Two_pin_element_2d& two_pin,
+        const NTHUR::Congestion& congestion,
+        const NTHUR::Construct_2d_tree& construct_2d_tree,
+        int box_size,
+        std::vector<NTHUR::Coordinate_2d>& path) {
+    NTHUR::Coordinate_2d start;
+    NTHUR::Coordinate_2d end;
+
+    start.x = std::min(two_pin.pin1.x, two_pin.pin2.x);
+    start.y = std::min(two_pin.pin1.y, two_pin.pin2.y);
+    end.x = std::max(two_pin.pin1.x, two_pin.pin2.x);
+    end.y = std::max(two_pin.pin1.y, two_pin.pin2.y);
+
+    start.x = std::max(0, start.x - box_size);
+    start.y = std::max(0, start.y - box_size);
+    end.x = std::min(construct_2d_tree.rr_map.get_gridx() - 1, end.x + box_size);
+    end.y = std::min(construct_2d_tree.rr_map.get_gridy() - 1, end.y + box_size);
+
+    return find_strict_legal_maze_path(two_pin, congestion, start, end, path);
+}
+
 void sort_twopins_by_overflow_score(std::vector<NTHUR::Two_pin_element_2d*>& twopin_list,
         const NTHUR::Congestion& congestion) {
     struct ScoredTwoPin {
@@ -776,6 +885,17 @@ struct RerouteProposal {
     bool proposed = false;
     bool committed = false;
     bool rejected = false;
+};
+
+struct StrictRepairInput {
+    NTHUR::Two_pin_element_2d* two_pin = nullptr;
+    int overflow_score = 0;
+};
+
+struct StrictRepairState {
+    std::vector<NTHUR::Coordinate_2d> original_path;
+    NTHUR::Coordinate_2d original_pin1;
+    NTHUR::Coordinate_2d original_pin2;
 };
 
 struct RerouteCandidateBox {
@@ -1865,6 +1985,219 @@ bool NTHUR::RangeRouter::commit_reroute_proposal(Two_pin_element_2d& two_pin,
     return true;
 }
 
+void NTHUR::RangeRouter::run_v8_strict_legal_repair(
+        std::vector<Two_pin_element_2d*>& twopin_list, int version) {
+    if (!v8_strict_legal_repair_enabled() || twopin_list.empty()) {
+        return;
+    }
+
+    const bool do_log = profile_enabled() || proposal_reroute_log_enabled();
+    OverflowStats stats = current_overflow_stats(congestion);
+    const int trigger = v8_strict_legal_repair_trigger();
+    const int max_overflow = v8_strict_legal_repair_max_overflow();
+    if (stats.total_overflow <= 0 || stats.total_overflow < trigger ||
+            stats.total_overflow > max_overflow) {
+        if (do_log) {
+            log_sp->info("v8 strict legal repair skipped: total_overflow={} max_overflow={} trigger={} max_total={}",
+                    stats.total_overflow, stats.max_overflow, trigger, max_overflow);
+        }
+        return;
+    }
+
+    const int rounds = v8_strict_legal_repair_rounds();
+    const int max_candidates = v8_strict_legal_repair_max_candidates();
+    const int batch_size = v8_strict_legal_repair_batch_size();
+    const int edge_quota = v8_strict_legal_repair_edge_quota();
+    const int base_box = std::max(construct_2d_tree.BOXSIZE_INC,
+            v8_strict_legal_repair_base_box());
+    const int box_inc = v8_strict_legal_repair_box_inc();
+    const int max_no_progress = v8_strict_legal_repair_max_no_progress();
+
+    int total_inputs = 0;
+    int total_selected = 0;
+    int total_proposed = 0;
+    int total_committed = 0;
+    int total_rejected = 0;
+    int no_progress_rounds = 0;
+    double total_proposal_ms = 0.0;
+    double total_commit_ms = 0.0;
+
+    if (do_log) {
+        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} box_inc={}",
+                stats.total_overflow, stats.max_overflow, trigger, max_overflow,
+                rounds, max_candidates, batch_size, edge_quota, base_box, box_inc);
+    }
+
+    for (int round = 1; round <= rounds && stats.total_overflow > 0; ++round) {
+        std::vector<StrictRepairInput> inputs;
+        inputs.reserve(twopin_list.size());
+        for (Two_pin_element_2d* two_pin : twopin_list) {
+            const int score = path_overflow_score(*two_pin, congestion);
+            if (score > 0) {
+                inputs.push_back(StrictRepairInput { two_pin, score });
+            }
+        }
+        if (inputs.empty()) {
+            break;
+        }
+        std::sort(inputs.begin(), inputs.end(),
+                [](const StrictRepairInput& a, const StrictRepairInput& b) {
+                    if (a.overflow_score != b.overflow_score) {
+                        return a.overflow_score > b.overflow_score;
+                    }
+                    return Two_pin_element_2d::comp_stn_2pin(*a.two_pin, *b.two_pin);
+                });
+        if (max_candidates < static_cast<int>(inputs.size())) {
+            inputs.resize(max_candidates);
+        }
+
+        std::vector<Two_pin_element_2d*> selected;
+        selected.reserve(std::min(batch_size, static_cast<int>(inputs.size())));
+        std::unordered_set<int> selected_net_ids;
+        selected_net_ids.reserve(std::min(batch_size, static_cast<int>(inputs.size())));
+        std::unordered_map<std::uint64_t, int> selected_overflow_edges;
+        selected_overflow_edges.reserve(std::min(batch_size * 4, static_cast<int>(inputs.size()) * 2));
+        std::vector<OverflowEdgeRef> overflow_edges;
+        int conflict_skipped = 0;
+        for (const StrictRepairInput& input : inputs) {
+            if (static_cast<int>(selected.size()) >= batch_size) {
+                break;
+            }
+            bool conflict = selected_net_ids.find(input.two_pin->net_id) != selected_net_ids.end();
+            collect_overflow_route_edges(*input.two_pin, congestion, overflow_edges);
+            if (!conflict) {
+                for (const OverflowEdgeRef& edge : overflow_edges) {
+                    const auto edge_count = selected_overflow_edges.find(edge.key);
+                    const int used_count = edge_count == selected_overflow_edges.end() ? 0 : edge_count->second;
+                    if (used_count >= edge_quota) {
+                        conflict = true;
+                        break;
+                    }
+                }
+            }
+            if (conflict) {
+                ++conflict_skipped;
+                continue;
+            }
+            selected_net_ids.insert(input.two_pin->net_id);
+            for (const OverflowEdgeRef& edge : overflow_edges) {
+                ++selected_overflow_edges[edge.key];
+            }
+            selected.push_back(input.two_pin);
+        }
+        if (selected.empty()) {
+            break;
+        }
+
+        std::vector<StrictRepairState> states(selected.size());
+        for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
+            Two_pin_element_2d& two_pin = *selected[i];
+            states[i].original_path = two_pin.path;
+            states[i].original_pin1 = two_pin.pin1;
+            states[i].original_pin2 = two_pin.pin2;
+        }
+        for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
+            congestion.update_congestion_map_remove_two_pin_net(states[i].original_path,
+                    selected[i]->net_id);
+        }
+
+        std::vector<RerouteProposal> proposals(selected.size());
+        const int repair_box = base_box + (round - 1) * box_inc;
+        const auto proposal_start = ProfileClock::now();
+#ifdef NTHU_ROUTE_OPENMP
+#pragma omp parallel for schedule(dynamic, 1)
+#endif
+        for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
+            proposals[i].two_pin = selected[i];
+            proposals[i].proposed = find_strict_legal_path_with_box(*selected[i],
+                    congestion, construct_2d_tree, repair_box, proposals[i].path);
+        }
+        const double proposal_ms_value = profile_ms(proposal_start, ProfileClock::now());
+
+        for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
+            Two_pin_element_2d& two_pin = *selected[i];
+            two_pin.path = states[i].original_path;
+            two_pin.pin1 = states[i].original_pin1;
+            two_pin.pin2 = states[i].original_pin2;
+            congestion.update_congestion_map_insert_two_pin_net(two_pin);
+        }
+
+        const auto commit_start = ProfileClock::now();
+        int proposed = 0;
+        int committed = 0;
+        int rejected = 0;
+        for (RerouteProposal& proposal : proposals) {
+            if (!proposal.proposed || proposal.path.size() < 2) {
+                continue;
+            }
+            ++proposed;
+            Two_pin_element_2d& two_pin = *proposal.two_pin;
+            if (congestion.check_path_no_overflow(two_pin.path, two_pin.net_id, false)) {
+                continue;
+            }
+
+            const std::vector<Coordinate_2d> original_path(two_pin.path);
+            const Coordinate_2d original_pin1 = two_pin.pin1;
+            const Coordinate_2d original_pin2 = two_pin.pin2;
+            congestion.update_congestion_map_remove_two_pin_net(original_path, two_pin.net_id);
+
+            if (congestion.check_path_no_overflow(proposal.path, two_pin.net_id, true)) {
+                two_pin.path = proposal.path;
+                two_pin.pin1 = two_pin.path.front();
+                two_pin.pin2 = two_pin.path.back();
+                if (version == 2) {
+                    two_pin.done = construct_2d_tree.done_iter;
+                }
+                construct_2d_tree.NetDirtyBit[two_pin.net_id] = true;
+                congestion.update_congestion_map_insert_two_pin_net(two_pin);
+                proposal.committed = true;
+                ++committed;
+                continue;
+            }
+
+            two_pin.path = original_path;
+            two_pin.pin1 = original_pin1;
+            two_pin.pin2 = original_pin2;
+            congestion.update_congestion_map_insert_two_pin_net(two_pin);
+            proposal.rejected = true;
+            ++rejected;
+        }
+        const double commit_ms_value = profile_ms(commit_start, ProfileClock::now());
+        stats = current_overflow_stats(congestion);
+
+        total_inputs += static_cast<int>(inputs.size());
+        total_selected += static_cast<int>(selected.size());
+        total_proposed += proposed;
+        total_committed += committed;
+        total_rejected += rejected;
+        total_proposal_ms += proposal_ms_value;
+        total_commit_ms += commit_ms_value;
+
+        if (do_log) {
+            log_sp->info("v8 strict legal repair round={} inputs={} selected={} conflict_skipped={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box={} edge_quota={} proposal_ms={:.3f} commit_ms={:.3f}",
+                    round, inputs.size(), selected.size(), conflict_skipped, proposed,
+                    committed, rejected, stats.total_overflow, stats.max_overflow,
+                    repair_box, edge_quota, proposal_ms_value, commit_ms_value);
+        }
+
+        if (committed == 0) {
+            ++no_progress_rounds;
+            if (no_progress_rounds >= max_no_progress) {
+                break;
+            }
+        } else {
+            no_progress_rounds = 0;
+        }
+    }
+
+    if (do_log) {
+        log_sp->info("v8 strict legal repair phase inputs={} selected={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} proposal_ms={:.3f} commit_ms={:.3f}",
+                total_inputs, total_selected, total_proposed, total_committed,
+                total_rejected, stats.total_overflow, stats.max_overflow,
+                total_proposal_ms, total_commit_ms);
+    }
+}
+
 void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*>& twopin_list, int version) {
     if (proposal_reroute_batches_enabled() && !twopin_list.empty()) {
         const bool do_profile = profile_enabled();
@@ -2480,6 +2813,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 }
             }
         }
+        run_v8_strict_legal_repair(twopin_list, version);
         return;
     }
 #ifdef NTHU_ROUTE_OPENMP
