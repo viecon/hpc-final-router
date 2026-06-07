@@ -1463,6 +1463,43 @@ Decision:
   smoke while remaining faster than original on both rows.
 - Expand to the `legal7` guard before any requested-set benchmark.
 
+### v8.7 legal7 Guard Abort And High-Residual Fix
+
+Guard run:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_9e55b5d_legal7_selfripup_2x7t
+```
+
+Result:
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.7 guard | 16k direct/proposal, 2x7t guard | `adaptec1` | 204.089962 | 441.962666 | 2.166x | 1.192 | 7308 / 4 | rejected, guard abort |
+
+Diagnosis:
+
+- `adaptec1` is originally legal, so the guard was stopped after this failure
+  and the remaining process groups were killed.
+- This is not a low-tail issue.  The NTHU log ended with internal 2D overflow
+  `cur_cap-max_cap=3654`, far above the low-tail self-ripup trigger.
+- The direct/proposal hot set was underfed for this larger benchmark.
+
+High-residual probes:
+
+| Probe | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| highcov32k | `adaptec1` | 165.190281 | 441.962666 | 2.675x | 1.192 | 4360 / 2 | rejected |
+| highcov32k+p2x32 | `adaptec1` | 231.355847 | 441.962666 | 1.910x | 1.214 | 0 / 0 | legal |
+
+Decision:
+
+- promote high coverage and larger high-overflow repair budget to v8.8
+  default: direct limit 32768, proposal max candidates 32768, proposal batch
+  8192, adaptive repair P2 max 16, high-overflow P2 max 32, final full-remainder
+  rounds 12;
+- rerun smoke before legal7 because the default changed.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:
