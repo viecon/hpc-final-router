@@ -1625,6 +1625,37 @@ Why this is not benchmark hardcoding:
 - high-residual rows such as `adaptec1` get high coverage before the solution
   enters a low-progress tail.
 
+### v8.10 Adaptec1 Probe And P2 Tail Decision
+
+Probe roots:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_probe/frontier_v8_direct_proposal_dd142e1_adaptec1_early_emergency_14t
+/home/ubuntu/hpc-final-router/results/vm_aggressive_probe/frontier_v8_direct_proposal_dd142e1_adaptec1_early_emergency_p2x48_14t
+```
+
+Result:
+
+| Probe | Benchmark | Threads | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| early emergency P2 max 32 | `adaptec1` | 14 | 199.536161 | 441.962666 | 2.215x | 1.212 | 346 / 2 | rejected, still illegal |
+| early emergency P2 max 48 | `adaptec1` | 14 | 216.206094 | 441.962666 | 2.044x | 1.221 | 0 / 0 | legal, promote default |
+
+Key log:
+
+```text
+v8 early emergency repair enabled: overflow=33295 trigger=30000 current_iter=5 max_iter=48
+v8 low-tail self-ripup phase inputs=32 proposed=7 committed=5 rejected=2 total_overflow=0
+2D max overflow = 0
+```
+
+Decision:
+
+- set `NTHU_V8_EMERGENCY_P2_MAX_ITER` default from 32 to 48;
+- keep `NTHU_V8_EMERGENCY_EARLY_TRIGGER=30000`, because smoke rows did not
+  trigger early emergency and kept the fast-path speed;
+- rerun `legal7` with the promoted default.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:
