@@ -2951,3 +2951,88 @@ Classification:
 - The script is patched so the default build directory now follows
   `ROUTER_OPENMP` / `ROUTER_CUDA`, and `environment.txt` records `build_dir`.
 - v8.46 has no valid speed or legality metric and must not be used in summaries.
+
+v8.47 real-OpenMP cap-44 smoke after runner fix:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_6ce24c8_smoke_easyhard_emerg44_v8_47_openmp14t
+commit=6ce24c8
+same cap-44 config as v8.46, but using the corrected OpenMP build directory
+build_dir=/home/ubuntu/hpc-final-router/external/nthu-route/build-release-vm-openmp-ON
+```
+
+OpenMP verification:
+
+```text
+NthuRoute log:
+  = OpenMP acceleration enabled, max threads: 14         =
+ps -L:
+  14 NthuRoute threads were present
+process CPU:
+  about 3.5x to 5.0x CPU during proposal-heavy regions
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.47 | `newblue2` | 114.904808 | 76.516170 | 0.666x | 8787766 | 1.157x | 1796 / 26 | rejected; illegal |
+| v8.47 | `adaptec4` | killed after easy failure | 130.666544 | NA | NA | NA | NA | killed |
+
+Evidence:
+
+```text
+newblue2 router log:
+  v8 emergency repair complete: overflow=898
+  2D sum overflow=1796
+  2D max overflow=78
+  3D # of overflow=1796
+  3D max overflow=26
+Checker summary:
+  total_wirelength=8787766
+  total_overflow=1796
+  max_overflow=26
+```
+
+Classification:
+
+- The runner fix worked: this was a real OpenMP build and real 14-thread run.
+- The result is invalid because a benchmark that original routes legally became
+  illegal.
+- The hard smoke was killed by process group after the easy summary was written.
+- The main suspected area is the OpenMP proposal generation path in
+  `route_twopin_candidates`, not the deterministic serial commit stage.
+
+v8.48 one-thread OpenMP diagnostic:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_6ce24c8_probe_newblue2_emerg44_v8_48_openmp1t
+commit=6ce24c8
+same cap-44 config as v8.47
+ROUTER_OPENMP=ON
+ROUTER_THREADS=1
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.48 | `newblue2` | timeout at 230 | 76.516170 | <0.333x | NA | NA | NA | rejected; timeout |
+
+Evidence:
+
+```text
+last log before timeout:
+  V8 emergency repair P2 iteration: 24
+  cal max overflow=48 cur_cap-max_cap=3567
+```
+
+Classification:
+
+- v8.48 does not prove or disprove race by itself because cap 44 has a long
+  emergency tail even with one OpenMP thread.
+- It does show cap 44 is not a useful next legal candidate.
+- Next implementation change: add `NTHU_V8_PROPOSAL_PARALLEL` and default it to
+  off in `frontier_v8_direct_proposal`. This keeps the OpenMP build for safer
+  scan/reduction code, but makes the proposal-only parallel path opt-in until it
+  can be proven legal.

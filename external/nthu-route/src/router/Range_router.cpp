@@ -247,6 +247,14 @@ bool proposal_reroute_adaptive_rounds_enabled() {
     return std::getenv("NTHU_PROPOSAL_REROUTE_ADAPTIVE_ROUNDS") != nullptr;
 }
 
+bool v8_proposal_parallel_enabled() {
+    const char* value = std::getenv("NTHU_V8_PROPOSAL_PARALLEL");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
 bool v8_reject_cooldown_enabled() {
     return std::getenv("NTHU_V8_REJECT_COOLDOWN") != nullptr;
 }
@@ -2878,12 +2886,27 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             std::vector<RerouteProposal> proposals(overflow_twopins.size());
             const auto proposal_start = ProfileClock::now();
 #ifdef NTHU_ROUTE_OPENMP
+            if (v8_proposal_parallel_enabled()) {
 #pragma omp parallel
+                {
+                    MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
+                    Multisource_multisink_mazeroute local_maze(construct_2d_tree, congestion);
+                    local_maze.set_rebuild_tree_from_twopins(true);
+#pragma omp for schedule(dynamic, 1)
+                    for (int i = 0; i < static_cast<int>(overflow_twopins.size()); ++i) {
+                        proposals[i].two_pin = overflow_twopins[i];
+                        proposals[i].proposed = propose_reroute_path(*overflow_twopins[i], version,
+                                local_monotonic, allow_maze ? &local_maze : nullptr, allow_maze,
+                                proposals[i].path, ripup_before_propose,
+                                ripup_before_propose ? ripped_paths[i].old_overflow_score : -1);
+                    }
+                }
+            } else
+#endif
             {
                 MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
                 Multisource_multisink_mazeroute local_maze(construct_2d_tree, congestion);
                 local_maze.set_rebuild_tree_from_twopins(true);
-#pragma omp for schedule(dynamic, 1)
                 for (int i = 0; i < static_cast<int>(overflow_twopins.size()); ++i) {
                     proposals[i].two_pin = overflow_twopins[i];
                     proposals[i].proposed = propose_reroute_path(*overflow_twopins[i], version,
@@ -2892,18 +2915,6 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                             ripup_before_propose ? ripped_paths[i].old_overflow_score : -1);
                 }
             }
-#else
-            MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
-            Multisource_multisink_mazeroute local_maze(construct_2d_tree, congestion);
-            local_maze.set_rebuild_tree_from_twopins(true);
-            for (int i = 0; i < static_cast<int>(overflow_twopins.size()); ++i) {
-                proposals[i].two_pin = overflow_twopins[i];
-                proposals[i].proposed = propose_reroute_path(*overflow_twopins[i], version,
-                        local_monotonic, allow_maze ? &local_maze : nullptr, allow_maze,
-                        proposals[i].path, ripup_before_propose,
-                        ripup_before_propose ? ripped_paths[i].old_overflow_score : -1);
-            }
-#endif
 
             const double proposal_ms_value = profile_ms(proposal_start, ProfileClock::now());
             if (safe_commit) {
@@ -3073,12 +3084,26 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                         construct_2d_tree.BOXSIZE_INC = tail_box_inc;
                     }
 #ifdef NTHU_ROUTE_OPENMP
+                    if (v8_proposal_parallel_enabled()) {
 #pragma omp parallel
+                        {
+                            MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
+                            Multisource_multisink_mazeroute local_maze(construct_2d_tree, congestion);
+                            local_maze.set_rebuild_tree_from_twopins(true);
+#pragma omp for schedule(dynamic, 1)
+                            for (int i = 0; i < static_cast<int>(tail_inputs.size()); ++i) {
+                                tail_proposals[i].two_pin = tail_inputs[i].two_pin;
+                                tail_proposals[i].proposed = propose_reroute_path(*tail_inputs[i].two_pin, version,
+                                        local_monotonic, allow_maze ? &local_maze : nullptr, allow_maze,
+                                        tail_proposals[i].path, false, tail_inputs[i].overflow_score);
+                            }
+                        }
+                    } else
+#endif
                     {
                         MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
                         Multisource_multisink_mazeroute local_maze(construct_2d_tree, congestion);
                         local_maze.set_rebuild_tree_from_twopins(true);
-#pragma omp for schedule(dynamic, 1)
                         for (int i = 0; i < static_cast<int>(tail_inputs.size()); ++i) {
                             tail_proposals[i].two_pin = tail_inputs[i].two_pin;
                             tail_proposals[i].proposed = propose_reroute_path(*tail_inputs[i].two_pin, version,
@@ -3086,17 +3111,6 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                                     tail_proposals[i].path, false, tail_inputs[i].overflow_score);
                         }
                     }
-#else
-                    MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
-                    Multisource_multisink_mazeroute local_maze(construct_2d_tree, congestion);
-                    local_maze.set_rebuild_tree_from_twopins(true);
-                    for (int i = 0; i < static_cast<int>(tail_inputs.size()); ++i) {
-                        tail_proposals[i].two_pin = tail_inputs[i].two_pin;
-                        tail_proposals[i].proposed = propose_reroute_path(*tail_inputs[i].two_pin, version,
-                                local_monotonic, allow_maze ? &local_maze : nullptr, allow_maze,
-                                tail_proposals[i].path, false, tail_inputs[i].overflow_score);
-                    }
-#endif
                     construct_2d_tree.BOXSIZE_INC = original_boxsize_inc;
                     const double tail_proposal_ms_value = profile_ms(tail_proposal_start, ProfileClock::now());
 
