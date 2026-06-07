@@ -985,6 +985,148 @@ NTHU_PROPOSAL_REROUTE_IMPROVEMENT_COMMIT=1
 NTHU_PROPOSAL_REROUTE_RIPUP_BEFORE_PROPOSE=1
 ```
 
+### v7 Standalone 14-Thread Follow-Up
+
+The v7.6 result above ran easy and hard concurrently with 7 threads each.  A
+follow-up standalone smoke used one benchmark at a time with
+`ROUTER_THREADS=14`:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_33e8cec_smoke_009_14t_seq
+```
+
+| Version | Benchmark | Seconds | Original seconds | Speedup vs original | WL | WL ratio | Overflow | Max overflow |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| v7.6 14t | newblue2 | 80.935161 | 76.516170 | 0.945x | 8797783 | 1.158 | 0 | 0 |
+| v7.6 14t | adaptec4 | 132.629088 | 130.666544 | 0.985x | 13567513 | 1.111 | 0 | 0 |
+
+Classification:
+
+- The same proposal-only router is much faster when a single benchmark can use
+  all 14 threads.
+- It is legal, but still not a speed win against original on the smoke pair.
+- This confirms that concurrent easy+hard smoke is useful for throughput, while
+  standalone smoke is the fair per-case latency measure.
+
+### v7.7 Adaptive Proposal Rounds
+
+Commit:
+
+```text
+b3e7aa2 Adapt v7 proposal rounds on low overflow
+```
+
+Result root:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_b3e7aa2_smoke_010_adaptive_14t_seq
+```
+
+Change:
+
+- add `NTHU_PROPOSAL_REROUTE_ADAPTIVE_ROUNDS=1`;
+- when current total overflow is at or below
+  `NTHU_PROPOSAL_REROUTE_LOW_OVERFLOW_LIMIT=1000`, reduce proposal rounds from
+  `6` to `NTHU_PROPOSAL_REROUTE_LOW_MAX_ROUNDS=2`;
+- keep the same collision-aware, rip-up snapshot, deterministic improvement
+  commit pipeline.
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup vs original | WL | WL ratio | Overflow | Max overflow |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| v7.7 adaptive | newblue2 | 70.329429 | 76.516170 | 1.088x | 8793554 | 1.158 | 0 | 0 |
+| v7.7 adaptive | adaptec4 | 145.945915 | 130.666544 | 0.895x | 13566665 | 1.111 | 0 | 0 |
+
+Classification:
+
+- Adaptive rounds helped `newblue2`: low-overflow repair avoided many extra
+  proposal rounds and beat original runtime on the easy smoke.
+- The same rule hurt `adaptec4`: it left a small tail for final repair, making
+  the hard row slower than v7.6 14t.
+- The idea is valid as an adaptive-parallelism probe, but the low-overflow
+  policy is not uniformly better.
+
+### Rejected v7.8 Global-Commit Gate
+
+The next aggressive attempt tried to rescue rejected low-overflow proposals by
+temporarily restoring the old path, tentatively inserting the proposed path,
+and accepting only if whole-grid total overflow decreased.  This follows the
+transaction / deterministic commit direction, but it must be cheap and must not
+damage final-tail convergence.
+
+Unbounded global gate:
+
+```text
+75dc930 Add global overflow gate for v7 proposals
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_75dc930_smoke_011_globalgate_14t_seq
+```
+
+Observed result:
+
+- `newblue2` completed legally in `95.609765s`, WL `8792786`.
+- The run was manually stopped before completing hard because logs showed the
+  support problem clearly: low-overflow phases spent about `0.9s-2.2s` in
+  commit checks after scanning too many rejected proposals.
+- Manual stop file:
+  `manual_stop.txt` in the run root records the process groups stopped.
+
+Capped global gate:
+
+```text
+75d20a4 Cap v7 global overflow commit tests
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_75d20a4_smoke_012_globalcap16_14t_seq
+```
+
+| Version | Benchmark | Seconds | Original seconds | Speedup vs original | WL | WL ratio | Overflow | Max overflow |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| v7.8 cap16 | newblue2 | 78.000646 | 76.516170 | 0.981x | 8793620 | 1.158 | 0 | 0 |
+| v7.8 cap16 | adaptec4 | 144.774601 | 130.666544 | 0.903x | 13568085 | 1.111 | 2 | 2 |
+
+Classification:
+
+- The cap fixed the support-cost issue: `global_tests` was bounded at 16 per
+  round and commit time dropped from seconds to roughly hundreds of ms.
+- It is still rejected because `adaptec4` ended with overflow.
+- Timeline diagnosis: final full-remainder repair did run, but after six final
+  rounds the capped global gate state still left `cur_cap-max_cap=1` and the
+  evaluator reported `total_overflow=2`.
+- Therefore global-commit gate is kept only as an off-by-default experiment.
+  It is not part of the v7 default strategy.
+
+### Current v7 Default At Branch Head
+
+Commit:
+
+```text
+decf468 Disable rejected v7 global gate defaults
+```
+
+Result root:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_proposal_reroute_v7_decf468_smoke_013_default_14t_seq
+```
+
+Default v7 still includes the optional global-gate code, but the smoke/guard
+configuration does not set `NTHU_PROPOSAL_REROUTE_GLOBAL_COMMIT_LIMIT`, so the
+gate is disabled (`global_commit_limit=0` in logs).
+
+| Version | Benchmark | Seconds | Original seconds | Speedup vs original | WL | WL ratio | Overflow | Max overflow |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| v7 default | newblue2 | 71.824901 | 76.516170 | 1.065x | 8792180 | 1.158 | 0 | 0 |
+| v7 default | adaptec4 | 123.377374 | 130.666544 | 1.059x | 13566998 | 1.111 | 0 | 0 |
+
+Classification:
+
+- This is the current legal v7 branch-head smoke result.
+- It beats original on both smoke rows, but WL remains about `1.11x-1.16x`
+  original.
+- It is still not the final recommended speed/quality router over the v5a/v4
+  legal baseline; it is the technically correct proposal-only parallel
+  prototype.
+- No `external/nthu-route-original` changes were present during the VM syncs.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:
