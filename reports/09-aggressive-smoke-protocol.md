@@ -1374,6 +1374,60 @@ Hypothesis:
 - low-tail proposal gets enough search area to produce legal alternatives;
 - deterministic global commit prevents the v8.3 oversubscribe failure mode.
 
+### v8.6 Wide-Box Proposal Result And Layer Diagnosis
+
+Commit:
+
+```text
+cdb8fed Add v8 low-tail wide-box proposal
+```
+
+Run roots:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_cdb8fed_smoke_011_easy_widebox_14t
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_cdb8fed_smoke_012_hard_widebox_14t
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_cdb8fed_smoke_013_hard_layerrepair_14t
+```
+
+Result:
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.6 | v8.5 + low-tail wide box 66 | `newblue2` | 68.137027 | 76.516170 | 1.123x | 1.158 | 0 / 0 | legal |
+| v8.6 | same | `adaptec4` | 134.711842 | 130.666544 | 0.970x | 1.111 | 2 / 2 | rejected, illegal |
+| v8.6-probe | same + existing layer overflow repair | `adaptec4` | 134.626645 | 130.666544 | 0.971x | 1.111 | 2 / 2 | rejected, moved 0 |
+
+Diagnosis:
+
+- Wide-box low-tail proposal increased the number of proposed candidates on
+  the hard tail, but every candidate was rejected by the global gate.
+- The single evaluator overflow edge is vertical `(399,386,layer6)`, demand
+  30, capacity 28.  The same 2D edge is already full on layer2 and layer4, so
+  the existing layer-only repair cannot move a segment to another vertical
+  layer without causing a different overflow.  Its log reports
+  `Layer overflow repair moved 0 segments`.
+- Therefore the remaining issue is a true 2D tail: one net must be rerouted
+  away from that 2D edge.  Layer reassignment alone is insufficient.
+
+### v8.7 Low-Tail Self-Ripup Plan
+
+Code change:
+
+- keep the parallel v8 direct proposal path for the high-overflow phase;
+- keep v8.6 wide-box parallel low-tail proposal as the first attempt;
+- if overflow remains, test low-tail candidates one by one by ripping up only
+  that candidate, running maze with `NTHU_V8_LOW_TAIL_SELF_RIPUP_BOX_INC`
+  (default 122), and committing only if global total overflow decreases;
+- this is deterministic and targeted to the residual tail, not a return to the
+  old interval/range-router expansion.
+
+Risk:
+
+- the self-ripup phase is serial by design because it mutates the shared
+  congestion map.  It is only enabled when the measured total overflow is within
+  the low-tail limit, so the main routing work remains parallel.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:

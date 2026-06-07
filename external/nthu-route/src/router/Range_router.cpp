@@ -279,6 +279,26 @@ int v8_low_tail_box_inc() {
     return std::max(0, std::atoi(value));
 }
 
+bool v8_low_tail_self_ripup_enabled() {
+    return std::getenv("NTHU_V8_LOW_TAIL_SELF_RIPUP") != nullptr;
+}
+
+int v8_low_tail_self_ripup_box_inc() {
+    const char* value = std::getenv("NTHU_V8_LOW_TAIL_SELF_RIPUP_BOX_INC");
+    if (value == nullptr || *value == '\0') {
+        return 122;
+    }
+    return std::max(0, std::atoi(value));
+}
+
+int v8_low_tail_self_ripup_max_tests() {
+    const char* value = std::getenv("NTHU_V8_LOW_TAIL_SELF_RIPUP_MAX_TESTS");
+    if (value == nullptr || *value == '\0') {
+        return 32;
+    }
+    return std::max(1, std::atoi(value));
+}
+
 int proposal_reroute_overflow_edge_quota() {
     const char* value = std::getenv("NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA");
     if (value == nullptr || *value == '\0') {
@@ -2282,6 +2302,124 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                             tail_total_inputs, tail_total_proposed, tail_total_committed,
                             tail_total_rejected, tail_stats.total_overflow, tail_stats.max_overflow,
                             tail_limit, tail_box_inc, tail_total_proposal_ms, tail_total_commit_ms);
+                }
+
+                if (v8_low_tail_self_ripup_enabled() && tail_stats.total_overflow > 0) {
+                    const int self_ripup_box_inc = v8_low_tail_self_ripup_box_inc();
+                    const int self_ripup_max_tests = v8_low_tail_self_ripup_max_tests();
+                    int self_total_inputs = 0;
+                    int self_total_proposed = 0;
+                    int self_total_committed = 0;
+                    int self_total_rejected = 0;
+                    double self_total_ms = 0.0;
+
+                    for (int self_round = 1; self_round <= tail_rounds && tail_stats.total_overflow > 0; ++self_round) {
+                        std::vector<ProposalInput> self_inputs;
+                        self_inputs.reserve(twopin_list.size());
+                        for (Two_pin_element_2d* two_pin : twopin_list) {
+                            const int overflow_score = path_overflow_score(*two_pin, congestion);
+                            if (overflow_score > 0) {
+                                self_inputs.push_back(ProposalInput { two_pin, overflow_score });
+                            }
+                        }
+                        if (self_inputs.empty()) {
+                            break;
+                        }
+                        std::sort(self_inputs.begin(), self_inputs.end(),
+                                [](const ProposalInput& a, const ProposalInput& b) {
+                                    if (a.overflow_score != b.overflow_score) {
+                                        return a.overflow_score > b.overflow_score;
+                                    }
+                                    return Two_pin_element_2d::comp_stn_2pin(*a.two_pin, *b.two_pin);
+                                });
+                        if (self_ripup_max_tests < static_cast<int>(self_inputs.size())) {
+                            self_inputs.resize(self_ripup_max_tests);
+                        }
+
+                        const auto self_start = ProfileClock::now();
+                        int self_proposed = 0;
+                        int self_committed = 0;
+                        int self_rejected = 0;
+                        for (const ProposalInput& input : self_inputs) {
+                            Two_pin_element_2d& two_pin = *input.two_pin;
+                            if (congestion.check_path_no_overflow(two_pin.path, two_pin.net_id, false)) {
+                                continue;
+                            }
+
+                            const std::vector<Coordinate_2d> original_path(two_pin.path);
+                            const Coordinate_2d original_pin1 = two_pin.pin1;
+                            const Coordinate_2d original_pin2 = two_pin.pin2;
+                            const OverflowStats old_stats = current_overflow_stats(congestion);
+
+                            congestion.update_congestion_map_remove_two_pin_net(original_path, two_pin.net_id);
+                            MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
+                            Multisource_multisink_mazeroute local_maze(construct_2d_tree, congestion);
+                            local_maze.set_rebuild_tree_from_twopins(true);
+                            std::vector<Coordinate_2d> proposed_path;
+
+                            const int original_boxsize_inc = construct_2d_tree.BOXSIZE_INC;
+                            if (self_ripup_box_inc > original_boxsize_inc) {
+                                construct_2d_tree.BOXSIZE_INC = self_ripup_box_inc;
+                            }
+                            const bool proposed = propose_reroute_path(two_pin, version,
+                                    local_monotonic, allow_maze ? &local_maze : nullptr, allow_maze,
+                                    proposed_path, true, input.overflow_score);
+                            construct_2d_tree.BOXSIZE_INC = original_boxsize_inc;
+
+                            if (proposed && proposed_path.size() >= 2) {
+                                ++self_proposed;
+                                two_pin.path = proposed_path;
+                                two_pin.pin1 = two_pin.path.front();
+                                two_pin.pin2 = two_pin.path.back();
+                                congestion.update_congestion_map_insert_two_pin_net(two_pin);
+                                const OverflowStats new_stats = current_overflow_stats(congestion);
+                                const bool accept = new_stats.total_overflow < old_stats.total_overflow &&
+                                        new_stats.max_overflow <= old_stats.max_overflow;
+                                if (accept) {
+                                    if (version == 2) {
+                                        two_pin.done = construct_2d_tree.done_iter;
+                                    }
+                                    construct_2d_tree.NetDirtyBit[two_pin.net_id] = true;
+                                    tail_stats = new_stats;
+                                    ++self_committed;
+                                    if (tail_stats.total_overflow == 0) {
+                                        break;
+                                    }
+                                    continue;
+                                }
+
+                                congestion.update_congestion_map_remove_two_pin_net(proposed_path, two_pin.net_id);
+                                ++self_rejected;
+                            }
+
+                            two_pin.path = original_path;
+                            two_pin.pin1 = original_pin1;
+                            two_pin.pin2 = original_pin2;
+                            congestion.update_congestion_map_insert_two_pin_net(two_pin);
+                            tail_stats = old_stats;
+                        }
+                        const double self_ms = profile_ms(self_start, ProfileClock::now());
+                        self_total_inputs += static_cast<int>(self_inputs.size());
+                        self_total_proposed += self_proposed;
+                        self_total_committed += self_committed;
+                        self_total_rejected += self_rejected;
+                        self_total_ms += self_ms;
+                        if (do_log) {
+                            log_sp->info("v8 low-tail self-ripup round={} inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box_inc={} elapsed_ms={:.3f}",
+                                    self_round, self_inputs.size(), self_proposed, self_committed,
+                                    self_rejected, tail_stats.total_overflow, tail_stats.max_overflow,
+                                    self_ripup_box_inc, self_ms);
+                        }
+                        if (self_committed == 0) {
+                            break;
+                        }
+                    }
+                    if (do_log) {
+                        log_sp->info("v8 low-tail self-ripup phase inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box_inc={} elapsed_ms={:.3f}",
+                                self_total_inputs, self_total_proposed, self_total_committed,
+                                self_total_rejected, tail_stats.total_overflow, tail_stats.max_overflow,
+                                self_ripup_box_inc, self_total_ms);
+                    }
                 }
             }
         }
