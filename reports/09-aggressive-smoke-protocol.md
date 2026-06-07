@@ -3990,3 +3990,71 @@ Classification:
   routing-state-based throttle for `direct route_all` so late iterations do not
   spend hundreds of milliseconds to seconds rerouting a small candidate set
   after every strict repair phase.
+
+v8.65 adaptive low-tail exit at overflow 1024:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_d76619c_smoke_easyhard_direct8192_minscore2_lowtail_exit1024_v8_65_openmp14t
+commit=d76619c
+code change:
+  Construct_2d_tree adaptive P2 now supports
+  NTHU_V8_ADAPTIVE_LOW_TAIL_EXIT_LIMIT.
+  When the post-route total overflow is at or below this routing-state limit,
+  adaptive P2 stops and lets post/low-tail/final repair take over.
+base config=v8.64
+V8_ADAPTIVE_LOW_TAIL_EXIT_LIMIT=1024
+V8_DIRECT_ROUTE_ALL_LIMIT=8192
+V8_DIRECT_ROUTE_ALL_MIN_SCORE=2
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.65 | `newblue2` | 73.451769 | 76.516170 | 1.042x | 8822031 | 1.162x | 0 / 0 | legal and faster than original |
+| v8.65 | `adaptec4` | 250.078471 | 130.666544 | 0.523x | 13578512 | 1.112x | 0 / 0 | legal; slightly slower than v8.64 |
+
+Evidence:
+
+```text
+newblue2:
+  NthuRoute internal time: 9.70472 70.0072
+  v8 adaptive low-tail exit: overflow=932 limit=1024 iter=5 max_iter=16
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 4702199 + 4119832 = 8822031
+  direct route_all count=5, total_ms=16101.365, scan_sort_ms=111.991
+  strict phases=7, proposal_ms=6558.209, commit_ms=532.417
+adaptec4:
+  NthuRoute internal time: 15.5208 244.524
+  v8 adaptive low-tail exit: overflow=981 limit=1024 iter=26 max_iter=48
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 9005434 + 4573078 = 13578512
+  direct route_all count=26, total_ms=135127.147, scan_sort_ms=649.332
+  strict phases=21, proposal_ms=23081.147, commit_ms=1692.686
+  low-tail global phase after exit: total_overflow=200, max_overflow=7,
+    proposal_ms=5237.775, commit_ms=12805.731
+  low-tail self-ripup then cleared 200 -> 0, elapsed_ms=14239.573
+aggregate:
+  legal=2/2
+  candidate_seconds=323.530240
+  original_seconds=207.182714
+  suite_speedup=0.640x
+  speedup versus v8.64 smoke seconds=1.021x
+```
+
+Classification:
+
+- This is the best current v8 legal smoke configuration by aggregate smoke
+  time, and it is the first aggressive config where `newblue2` is both legal
+  and faster than original.
+- The low-tail exit throttle is technically correct and deterministic: it
+  reduces hard `direct route_all` calls from 48 to 26 and hard direct-route
+  time from about 155.5s to 135.1s.
+- The 1024 threshold is too early for the hard row. It shifts too much work to
+  low-tail global/self-ripup, which costs about 32.3s after the exit and makes
+  hard slightly slower than v8.64.
+- Next probe: keep the same code and test a lower routing-state threshold
+  such as 768 or 512. The target is to preserve the easy speedup while avoiding
+  the expensive hard low-tail handoff at overflow near 1000.
