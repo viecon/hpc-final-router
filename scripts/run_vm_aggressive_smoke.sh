@@ -40,7 +40,7 @@ frontier_netguided_adaptive_repair_v3,frontier_edgecount_netguided_v2,same fast 
 frontier_adaptive_late_score1_v4,frontier_netguided_adaptive_repair_v3,same adaptive frontier but allows late P2 repair to reroute score-1 residual overflow and gives final full-remainder repair more rounds,internal legality repair follow-up; no new paper claim
 frontier_openmp_control_v5a,frontier_adaptive_late_score1_v4,run the v4 frontier on a current-source OpenMP build without conflict-batch reroute; isolates safe OpenMP loop speedup from batching effects,OpenMP control experiment
 frontier_direct_residual_v6,frontier_adaptive_late_score1_v4,add routing-state residual direct-overflow repair before full-remainder fallback to reduce low-overflow repair cost,NCTU-GR/SPRoute-style conflict-aware repair narrowing without benchmark-specific branching
-frontier_proposal_reroute_v7,frontier_adaptive_late_score1_v4,replace in-place serial reroute calls with collect/propose/deterministic-commit phases using local per-thread routing proposals,NCTU-GR collision-aware task scheduling; SPRoute adaptive proposal/commit direction
+frontier_proposal_reroute_v7,frontier_adaptive_late_score1_v4,replace in-place serial reroute calls with collect/propose/deterministic-commit phases using local per-thread routing proposals and low-overflow global-improvement commit,NCTU-GR collision-aware task scheduling; SPRoute adaptive proposal/commit direction
 frontier_openmp_conflict_batch_v5,frontier_adaptive_late_score1_v4,enable OpenMP conflict-box reroute batching on the v4 frontier to test in-process parallelism without benchmark-specific routing changes,NCTU-GR 2.0 collision-aware task scheduling; Shintani et al. overlapped-region candidate/commit model
 CSV
 
@@ -449,6 +449,7 @@ if strategy_enabled frontier_proposal_reroute_v7; then
     NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_CONFLICT=1
     NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA=8
     NTHU_PROPOSAL_REROUTE_IMPROVEMENT_COMMIT=1
+    NTHU_PROPOSAL_REROUTE_GLOBAL_COMMIT_LIMIT=1000
     NTHU_PROPOSAL_REROUTE_RIPUP_BEFORE_PROPOSE=1
     NTHU_PROPOSAL_REROUTE_ADAPTIVE_ROUNDS=1
     NTHU_PROPOSAL_REROUTE_LOW_OVERFLOW_LIMIT=1000
