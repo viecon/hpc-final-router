@@ -479,6 +479,14 @@ bool v8_strict_legal_repair_improvement_commit_enabled() {
     return std::atoi(value) != 0;
 }
 
+bool v8_strict_legal_repair_reuse_inputs_enabled() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_REUSE_INPUTS");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
 bool v8_strict_repair_allow_same_net_enabled() {
     const char* value = std::getenv("NTHU_V8_STRICT_REPAIR_ALLOW_SAME_NET");
     if (value == nullptr || *value == '\0') {
@@ -2123,6 +2131,7 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     const bool snapshot_global_gate =
             v8_strict_legal_repair_snapshot_global_gate_enabled();
     const bool improvement_commit = v8_strict_legal_repair_improvement_commit_enabled();
+    const bool reuse_inputs = v8_strict_legal_repair_reuse_inputs_enabled();
 
     int total_inputs = 0;
     int total_selected = 0;
@@ -2136,22 +2145,33 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     double total_commit_ms = 0.0;
 
     if (do_log) {
-        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} snapshot_commit_max={} snapshot_rollback={} snapshot_global_gate={} improvement_commit={}",
+        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} snapshot_commit_max={} snapshot_rollback={} snapshot_global_gate={} improvement_commit={} reuse_inputs={}",
                 stats.total_overflow, stats.max_overflow, trigger, max_overflow,
                 rounds, max_candidates, batch_size, edge_quota, base_box,
                 fixed_base_box, box_inc, snapshot_commit,
                 snapshot_commit_max_overflow, snapshot_rollback, snapshot_global_gate,
-                improvement_commit);
+                improvement_commit, reuse_inputs);
     }
 
+    std::vector<StrictRepairInput> reusable_inputs;
     for (int round = 1; round <= rounds && stats.total_overflow > 0; ++round) {
         const OverflowStats round_start_stats = stats;
         std::vector<StrictRepairInput> inputs;
-        inputs.reserve(twopin_list.size());
-        for (Two_pin_element_2d* two_pin : twopin_list) {
-            const int score = path_overflow_score(*two_pin, congestion);
-            if (score > 0) {
-                inputs.push_back(StrictRepairInput { two_pin, score });
+        if (reuse_inputs && !reusable_inputs.empty()) {
+            inputs.reserve(reusable_inputs.size());
+            for (const StrictRepairInput& previous_input : reusable_inputs) {
+                const int score = path_overflow_score(*previous_input.two_pin, congestion);
+                if (score > 0) {
+                    inputs.push_back(StrictRepairInput { previous_input.two_pin, score });
+                }
+            }
+        } else {
+            inputs.reserve(twopin_list.size());
+            for (Two_pin_element_2d* two_pin : twopin_list) {
+                const int score = path_overflow_score(*two_pin, congestion);
+                if (score > 0) {
+                    inputs.push_back(StrictRepairInput { two_pin, score });
+                }
             }
         }
         if (inputs.empty()) {
@@ -2166,6 +2186,9 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
                 });
         if (max_candidates < static_cast<int>(inputs.size())) {
             inputs.resize(max_candidates);
+        }
+        if (reuse_inputs) {
+            reusable_inputs = inputs;
         }
 
         std::vector<Two_pin_element_2d*> selected;
