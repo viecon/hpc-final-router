@@ -3926,3 +3926,67 @@ Next safe optimization direction:
   keep v8.62's 8192 direct/emergency coverage, then tune routing-state-based
   post/tail work limits instead of lowering all direct candidates globally.
 ```
+
+v8.64 direct/emergency limit 8192 with direct min score 2:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_5727da3_smoke_easyhard_direct8192_minscore2_v8_64_openmp14t
+commit=5727da3
+code base=same router code as b7e2035; 5727da3 is report-only
+runner=sequential easy+hard inside one run directory
+base config=v8.62
+V8_DIRECT_ROUTE_ALL_LIMIT=8192
+V8_DIRECT_ROUTE_ALL_MIN_SCORE=2
+V8_EMERGENCY_DIRECT_LIMIT=8192
+V8_EMERGENCY_PROPOSAL_MAX_CANDIDATES=16384
+V8_EMERGENCY_PROPOSAL_BATCH_SIZE=4096
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.64 | `newblue2` | 82.149768 | 76.516170 | 0.931x | 8817273 | 1.161x | 0 / 0 | legal; faster than v8.62 |
+| v8.64 | `adaptec4` | 248.311598 | 130.666544 | 0.526x | 13588770 | 1.113x | 0 / 0 | legal; faster than v8.62 |
+
+Evidence:
+
+```text
+newblue2:
+  NthuRoute internal time: 9.85611 78.7154
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 4695435 + 4121838 = 8817273
+  direct route_all count=16, total_ms=29358.631, scan_sort_ms=324.049
+  strict phases=17, proposal_ms=13852.377, commit_ms=1033.136
+adaptec4:
+  NthuRoute internal time: 15.2174 242.512
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 9011283 + 4577487 = 13588770
+  direct route_all count=48, total_ms=155496.399, scan_sort_ms=1102.193
+  strict phases=43, proposal_ms=27169.473, commit_ms=1853.038
+  low-tail global phase total_overflow=19, max_overflow=3,
+    proposal_ms=1587.963, commit_ms=3618.457
+  self-ripup then cleared 19 -> 0 in 1178.408 ms
+aggregate:
+  legal=2/2
+  candidate_seconds=330.461366
+  original_seconds=207.182714
+  suite_speedup=0.627x
+  speedup versus v8.62 smoke seconds=1.069x
+```
+
+Classification:
+
+- This is the best current v8 legal smoke configuration.
+- Raising `V8_DIRECT_ROUTE_ALL_MIN_SCORE` from 1 to 2 keeps both original-legal
+  smoke rows legal and reduces direct route-all work: hard direct route-all
+  time drops from about 175.3s in v8.62 to about 155.5s.
+- The improvement is real but not enough. The hard row still calls
+  `direct route_all` 48 times, so the dominant pitfall is now repeated
+  full-route-all invocation rather than scan/sort overhead or final tail cost.
+- Next code-level direction: keep min_score=2 and 8192 coverage, but add a
+  routing-state-based throttle for `direct route_all` so late iterations do not
+  spend hundreds of milliseconds to seconds rerouting a small candidate set
+  after every strict repair phase.
