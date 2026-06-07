@@ -2363,3 +2363,52 @@ v8.35 bounded-burst gate:
 This is a direct compromise between the DSD 2013 area-update idea and SPRoute's
 livelock-aware reduction of parallelism: keep batch parallelism while limiting
 how far a stale snapshot can move the congestion state away from convergence.
+
+v8.35 smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_df7d534_smoke_easyhard_burst32max1_v8_35_openmp14t
+```
+
+Config:
+
+```text
+snapshot_commit_max=128
+snapshot_global_gate=1
+snapshot_burst_total=32
+snapshot_burst_max=1
+proposal_edge_quota=8  # runner default; see classification
+OpenMP threads=14
+```
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.35 | `newblue2` | 134.939083 | 76.516170 | 0.567x | 8778990 | 1.156x | 0 / 0 | legal but too slow |
+| v8.35 | `adaptec4` | 392 gate | 130.666544 | 0.333x | router log 13568246 | 1.111x | router log 814 / 4 | rejected |
+
+Evidence:
+
+```text
+newblue2: strict repair snapshot_burst triggered twice and later rounds cleared overflow to 0.
+adaptec4: router finished around 345s with 3D overflow 814 / max 4, then evaluator hit the 392s smoke gate.
+adaptec4 tail: repeated proposal/strict rounds plateaued near total_overflow 407, with 240 proposals repeatedly rejected and 0 committed.
+adaptec4 utilization: NthuRoute reached about 7.9-8.8 CPU cores during proposal-heavy phases, so this was not a single-core-only run.
+```
+
+Classification:
+
+- Bounded burst works mechanically on `newblue2`, but it is slower than v8.31
+  and much slower than the v5a/v4 legal baseline.
+- It did not activate on the `adaptec4` hard plateau because
+  `snapshot_commit_max=128` and the plateau stayed around `407-506` overflow.
+- This run also used the runner default `proposal_edge_quota=8`, while earlier
+  strict-tail probes used quota 16.  That is a configuration/support issue, so
+  the next probe keeps the same v8.35 code and changes config rather than
+  calling this a separate algorithmic failure.
+
+v8.36 planned support/config probe:
+
+- set `V8_PROPOSAL_EDGE_QUOTA=16` to match the earlier strict-tail coverage;
+- raise `snapshot_commit_max` to 1024 so the hard plateau can enter the
+  snapshot/burst/global-gate path;
+- raise `snapshot_burst_total` to 64 while keeping `snapshot_burst_max=1`.
