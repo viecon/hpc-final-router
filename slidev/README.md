@@ -81,3 +81,26 @@ transition: slide-up
 * **Bounded-length reroute** - 保留為 opt-in 但未啟用
 * **CUDA scoring** - 保留程式碼，可選用但並非 final claim
 ```
+
+---
+transition: slide-up
+---
+
+# 實測數據
+
+| 基準 | 可平行範圍 | P | S(12) | S(∞) |
+| --- | --- | --- | --- | --- |
+| adaptec1 | scan/reduction | 0.0285% | 1.00026x | 1.00029x |
+| newblue2 | 寬鬆上限 | ≤0.7574% | ≤1.0070x | ≤1.0076x |
+| adaptec3 | 寬鬆上限 | ≤0.1979% | ≤1.0018x | ≤1.0020x |
+
+---
+transition: slide-up
+---
+
+# 從實測加速反推
+
+- **newblue2**: 65.6s → 63.6s = 1.032x
+  - P ≈ 3.42%
+- **adaptec3**: 491.5s → 485.3s = 1.013x
+  - P ≈ 1.37%
