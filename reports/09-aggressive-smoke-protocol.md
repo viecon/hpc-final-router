@@ -4120,3 +4120,63 @@ Classification:
 - Next probe: test an intermediate threshold such as 896. That should preserve
   more of v8.65's easy speed while hopefully avoiding the too-early hard
   low-tail handoff at overflow 981.
+
+v8.67 adaptive low-tail exit at overflow 896:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_7101501_smoke_easyhard_direct8192_minscore2_lowtail_exit896_v8_67_openmp14t
+commit=7101501
+code base=same router code as d76619c; 7101501 is report-only
+base config=v8.65
+V8_ADAPTIVE_LOW_TAIL_EXIT_LIMIT=896
+V8_DIRECT_ROUTE_ALL_LIMIT=8192
+V8_DIRECT_ROUTE_ALL_MIN_SCORE=2
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.67 | `newblue2` | 76.517259 | 76.516170 | 1.000x | 8820927 | 1.161x | 0 / 0 | legal; effectively tied with original |
+| v8.67 | `adaptec4` | 257.919615 | 130.666544 | 0.507x | 13578311 | 1.112x | 0 / 0 | legal but slower than v8.66 |
+
+Evidence:
+
+```text
+newblue2:
+  NthuRoute internal time: 9.67499 73.0895
+  v8 adaptive low-tail exit: overflow=822 limit=896 iter=7 max_iter=16
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 4699903 + 4121024 = 8820927
+  direct route_all count=7, total_ms=19385.318, scan_sort_ms=149.909
+  strict phases=8, proposal_ms=8060.619, commit_ms=662.204
+adaptec4:
+  NthuRoute internal time: 15.2872 251.983
+  v8 adaptive low-tail exit: overflow=866 limit=896 iter=28 max_iter=48
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 9005015 + 4573296 = 13578311
+  direct route_all count=28, total_ms=142694.201, scan_sort_ms=696.844
+  strict phases=24, proposal_ms=23701.336, commit_ms=1706.834
+  low-tail global phase after exit: total_overflow=181, max_overflow=5,
+    proposal_ms=5928.928, commit_ms=11994.114
+  low-tail self-ripup then reduced 181 -> 2, elapsed_ms=9398.081
+  a final low-tail/self-ripup sequence cleared 2 -> 0
+aggregate:
+  legal=2/2
+  candidate_seconds=334.436874
+  original_seconds=207.182714
+  suite_speedup=0.620x
+  speedup versus v8.66 smoke seconds=0.961x
+```
+
+Classification:
+
+- Rejected as a best config. It is legal, but the aggregate time is worse than
+  v8.66.
+- The 896 threshold improves easy relative to 768, but it hands off the hard
+  row to low-tail too early. The hard low-tail tail costs about 28s and makes
+  this slower than both v8.66 and v8.65 on `adaptec4`.
+- Current best remains v8.66: threshold 768, direct limit 8192, direct
+  min_score 2, proposal parallel enabled.
