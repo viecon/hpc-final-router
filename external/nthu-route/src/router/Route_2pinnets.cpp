@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <stack>
 #include <unordered_map>
 #include <utility>
@@ -41,6 +42,43 @@ double profile_ms(ProfileClock::time_point start, ProfileClock::time_point end) 
 
 bool profile_enabled() {
     return std::getenv("NTHU_PROFILE") != nullptr;
+}
+
+bool v8_direct_route_all_enabled() {
+    return std::getenv("NTHU_V8_DIRECT_ROUTE_ALL") != nullptr;
+}
+
+bool v8_direct_route_all_log_enabled() {
+    return profile_enabled() || std::getenv("NTHU_V8_DIRECT_ROUTE_ALL_LOG") != nullptr;
+}
+
+int v8_direct_route_all_limit() {
+    const char* value = std::getenv("NTHU_V8_DIRECT_ROUTE_ALL_LIMIT");
+    if (value == nullptr || *value == '\0') {
+        return std::numeric_limits<int>::max();
+    }
+    const int parsed = std::atoi(value);
+    if (parsed <= 0) {
+        return std::numeric_limits<int>::max();
+    }
+    return parsed;
+}
+
+int v8_direct_route_all_min_score() {
+    const char* value = std::getenv("NTHU_V8_DIRECT_ROUTE_ALL_MIN_SCORE");
+    if (value == nullptr || *value == '\0') {
+        return 1;
+    }
+    return std::max(1, std::atoi(value));
+}
+
+int v8_path_overflow_score(const Two_pin_element_2d& two_pin, const Congestion& congestion) {
+    int overflow_score = 0;
+    for (int i = static_cast<int>(two_pin.path.size()) - 2; i >= 0; --i) {
+        const Edge_2d& edge = congestion.congestionMap2d.edge(two_pin.path[i], two_pin.path[i + 1]);
+        overflow_score += std::max(0, edge.overUsage());
+    }
+    return overflow_score;
 }
 }
 
@@ -93,6 +131,77 @@ void Route_2pinnets::init_gridcell() {
 
 void Route_2pinnets::route_all_2pin_net() {
     auto start = ProfileClock::now();
+    if (v8_direct_route_all_enabled()) {
+        struct Candidate {
+            int id;
+            int overflow_score;
+            int bsize;
+        };
+
+        const int pin_count = static_cast<int>(construct_2d_tree.two_pin_list.size());
+        std::vector<Candidate> scanned(pin_count);
+        std::vector<unsigned char> is_candidate(pin_count, 0);
+        int overflow_seen = 0;
+        const int min_score = v8_direct_route_all_min_score();
+
+#ifdef NTHU_ROUTE_OPENMP
+#pragma omp parallel for schedule(dynamic, 256) reduction(max:overflow_seen)
+#endif
+        for (int i = 0; i < pin_count; ++i) {
+            Two_pin_element_2d& two_pin = construct_2d_tree.two_pin_list[i];
+            const int overflow_score = v8_path_overflow_score(two_pin, congestion);
+            if (overflow_score >= min_score) {
+                scanned[i] = Candidate {
+                        i,
+                        overflow_score,
+                        std::abs(two_pin.pin1.x - two_pin.pin2.x) + std::abs(two_pin.pin1.y - two_pin.pin2.y) };
+                is_candidate[i] = 1;
+                overflow_seen = 1;
+            }
+        }
+
+        std::vector<Candidate> candidates;
+        candidates.reserve(pin_count);
+        for (int i = 0; i < pin_count; ++i) {
+            if (is_candidate[i]) {
+                candidates.push_back(scanned[i]);
+            }
+        }
+        std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+            if (a.overflow_score != b.overflow_score) {
+                return a.overflow_score > b.overflow_score;
+            }
+            if (a.bsize != b.bsize) {
+                return a.bsize > b.bsize;
+            }
+            return a.id < b.id;
+        });
+
+        const int limit = v8_direct_route_all_limit();
+        const int route_count = std::min(static_cast<int>(candidates.size()), limit);
+        std::vector<Two_pin_element_2d*> reroute_candidates;
+        reroute_candidates.reserve(route_count);
+        for (int i = 0; i < route_count; ++i) {
+            Two_pin_element_2d& two_pin = construct_2d_tree.two_pin_list[candidates[i].id];
+            two_pin.done = construct_2d_tree.done_iter;
+            reroute_candidates.push_back(&two_pin);
+        }
+
+        const auto after_scan = ProfileClock::now();
+        if (!reroute_candidates.empty()) {
+            rangerouter.prepare_cuda_dogleg_choices(reroute_candidates);
+            rangerouter.route_twopin_candidates(reroute_candidates, 2);
+        }
+        construct_2d_tree.mazeroute_in_range.clear_net_tree();
+
+        if (v8_direct_route_all_log_enabled()) {
+            log_sp->info("v8 direct route_all: pins={} hot_candidates={} routed={} limit={} min_score={} overflow_seen={} scan_sort_ms={:.3f} total_ms={:.3f}",
+                    pin_count, candidates.size(), reroute_candidates.size(), limit, min_score,
+                    overflow_seen, profile_ms(start, after_scan), profile_ms(start, ProfileClock::now()));
+        }
+        return;
+    }
+
     init_gridcell();
     auto after_init = ProfileClock::now();
     rangerouter.define_interval();

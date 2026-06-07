@@ -1127,6 +1127,59 @@ Classification:
   prototype.
 - No `external/nthu-route-original` changes were present during the VM syncs.
 
+### v8 Aggressive Direct-Overflow Proposal Plan
+
+Branch:
+
+```text
+experiment-v8-aggressive-parallel
+```
+
+Previous version:
+
+```text
+frontier_proposal_reroute_v7
+```
+
+New strategy:
+
+```text
+frontier_v8_direct_proposal
+```
+
+Code change:
+
+- add opt-in `NTHU_V8_DIRECT_ROUTE_ALL=1` in
+  `Route_2pinnets::route_all_2pin_net()`;
+- when enabled, skip `init_gridcell()`, `define_interval()`,
+  `divide_grid_edge_into_interval()`, and interval/range expansion for that P2
+  round;
+- scan all current two-pin paths in parallel, compute current overflow score,
+  sort the hot set by overflow score and box size, then send only those hot
+  paths into the v7 proposal-only deterministic commit pipeline;
+- keep the same no-benchmark-name rule: the candidate set is selected only from
+  current congestion/routing state.
+
+Rationale:
+
+- v7 made proposal generation parallel but still fed it from NTHU's original
+  interval/range expansion path.
+- The v8 experiment makes the parallel proposal stage the primary P2 work unit:
+  scan is data-parallel, proposal search is per-candidate parallel, and commit
+  remains deterministic/exclusive.
+- This follows the same broad idea as collision-aware task scheduling and
+  parallel route-search / exclusive-update literature, but it is intentionally
+  more aggressive than the previous bounded v7 experiment.
+
+Smoke gate:
+
+- same easy+hard smoke pair as above;
+- `ROUTER_THREADS=14`, `PARALLEL_BENCH_JOBS=1` for per-case latency;
+- 3x-original timeout gate;
+- if smoke is legal and not slower than the gate, expand to `legal7`;
+- if a row is slower than 3x or illegal, classify as implementation/support vs
+  invalid optimization logic before changing direction.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:
