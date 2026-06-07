@@ -463,6 +463,14 @@ bool v8_strict_legal_repair_snapshot_rollback_enabled() {
     return std::atoi(value) != 0;
 }
 
+bool v8_strict_legal_repair_snapshot_global_gate_enabled() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_SNAPSHOT_GLOBAL_GATE");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
 bool v8_strict_legal_repair_improvement_commit_enabled() {
     const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_IMPROVEMENT_COMMIT");
     if (value == nullptr || *value == '\0') {
@@ -2112,6 +2120,8 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
             v8_strict_legal_repair_snapshot_commit_max_overflow();
     const bool snapshot_rollback =
             v8_strict_legal_repair_snapshot_rollback_enabled();
+    const bool snapshot_global_gate =
+            v8_strict_legal_repair_snapshot_global_gate_enabled();
     const bool improvement_commit = v8_strict_legal_repair_improvement_commit_enabled();
 
     int total_inputs = 0;
@@ -2120,16 +2130,18 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     int total_committed = 0;
     int total_rejected = 0;
     int total_rolled_back = 0;
+    int total_global_gated = 0;
     int no_progress_rounds = 0;
     double total_proposal_ms = 0.0;
     double total_commit_ms = 0.0;
 
     if (do_log) {
-        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} snapshot_commit_max={} snapshot_rollback={} improvement_commit={}",
+        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} snapshot_commit_max={} snapshot_rollback={} snapshot_global_gate={} improvement_commit={}",
                 stats.total_overflow, stats.max_overflow, trigger, max_overflow,
                 rounds, max_candidates, batch_size, edge_quota, base_box,
                 fixed_base_box, box_inc, snapshot_commit,
-                snapshot_commit_max_overflow, snapshot_rollback, improvement_commit);
+                snapshot_commit_max_overflow, snapshot_rollback, snapshot_global_gate,
+                improvement_commit);
     }
 
     for (int round = 1; round <= rounds && stats.total_overflow > 0; ++round) {
@@ -2224,8 +2236,23 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
         int committed = 0;
         int rejected = 0;
         bool rolled_back = false;
+        bool global_gated = false;
         const bool use_snapshot_commit = snapshot_commit &&
                 round_start_stats.total_overflow <= snapshot_commit_max_overflow;
+        auto restore_selected_originals = [&]() {
+            for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
+                Two_pin_element_2d& two_pin = *selected[i];
+                congestion.update_congestion_map_remove_two_pin_net(two_pin.path,
+                        two_pin.net_id);
+            }
+            for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
+                Two_pin_element_2d& two_pin = *selected[i];
+                two_pin.path = states[i].original_path;
+                two_pin.pin1 = states[i].original_pin1;
+                two_pin.pin2 = states[i].original_pin2;
+                congestion.update_congestion_map_insert_two_pin_net(two_pin);
+            }
+        };
         if (use_snapshot_commit) {
             for (RerouteProposal& proposal : proposals) {
                 if (!proposal.proposed || proposal.path.size() < 2) {
@@ -2315,22 +2342,69 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
         const double commit_ms_value = profile_ms(commit_start, ProfileClock::now());
         stats = current_overflow_stats(congestion);
 
-        if (use_snapshot_commit && snapshot_rollback &&
+        const bool snapshot_worsened = use_snapshot_commit &&
                 (stats.total_overflow > round_start_stats.total_overflow ||
                 (stats.total_overflow == round_start_stats.total_overflow &&
-                        stats.max_overflow > round_start_stats.max_overflow))) {
-            for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
-                Two_pin_element_2d& two_pin = *selected[i];
-                congestion.update_congestion_map_remove_two_pin_net(two_pin.path,
+                        stats.max_overflow > round_start_stats.max_overflow));
+        if (snapshot_worsened && snapshot_global_gate) {
+            restore_selected_originals();
+            stats = current_overflow_stats(congestion);
+            committed = 0;
+            rejected = 0;
+            global_gated = true;
+            for (RerouteProposal& proposal : proposals) {
+                proposal.committed = false;
+                proposal.rejected = false;
+                if (!proposal.proposed || proposal.path.size() < 2) {
+                    continue;
+                }
+                Two_pin_element_2d& two_pin = *proposal.two_pin;
+                if (congestion.check_path_no_overflow(two_pin.path, two_pin.net_id, false)) {
+                    proposal.rejected = true;
+                    ++rejected;
+                    continue;
+                }
+
+                const OverflowStats before_stats = stats;
+                const std::vector<Coordinate_2d> original_path(two_pin.path);
+                const Coordinate_2d original_pin1 = two_pin.pin1;
+                const Coordinate_2d original_pin2 = two_pin.pin2;
+                congestion.update_congestion_map_remove_two_pin_net(original_path,
                         two_pin.net_id);
-            }
-            for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
-                Two_pin_element_2d& two_pin = *selected[i];
-                two_pin.path = states[i].original_path;
-                two_pin.pin1 = states[i].original_pin1;
-                two_pin.pin2 = states[i].original_pin2;
+
+                two_pin.path = proposal.path;
+                two_pin.pin1 = two_pin.path.front();
+                two_pin.pin2 = two_pin.path.back();
                 congestion.update_congestion_map_insert_two_pin_net(two_pin);
+                const OverflowStats after_stats = current_overflow_stats(congestion);
+
+                const bool accept_global =
+                        after_stats.total_overflow < before_stats.total_overflow ||
+                        (after_stats.total_overflow == before_stats.total_overflow &&
+                                after_stats.max_overflow < before_stats.max_overflow);
+                if (accept_global) {
+                    if (version == 2) {
+                        two_pin.done = construct_2d_tree.done_iter;
+                    }
+                    construct_2d_tree.NetDirtyBit[two_pin.net_id] = true;
+                    proposal.committed = true;
+                    stats = after_stats;
+                    ++committed;
+                    continue;
+                }
+
+                congestion.update_congestion_map_remove_two_pin_net(proposal.path,
+                        two_pin.net_id);
+                two_pin.path = original_path;
+                two_pin.pin1 = original_pin1;
+                two_pin.pin2 = original_pin2;
+                congestion.update_congestion_map_insert_two_pin_net(two_pin);
+                proposal.rejected = true;
+                ++rejected;
             }
+            stats = current_overflow_stats(congestion);
+        } else if (snapshot_worsened && snapshot_rollback) {
+            restore_selected_originals();
             stats = current_overflow_stats(congestion);
             committed = 0;
             rejected = proposed;
@@ -2345,13 +2419,16 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
         if (rolled_back) {
             ++total_rolled_back;
         }
+        if (global_gated) {
+            ++total_global_gated;
+        }
         total_proposal_ms += proposal_ms_value;
         total_commit_ms += commit_ms_value;
 
         if (do_log) {
-            log_sp->info("v8 strict legal repair round={} inputs={} selected={} conflict_skipped={} proposed={} committed={} rejected={} snapshot_round={} rolled_back={} total_overflow={} max_overflow={} box={} edge_quota={} proposal_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("v8 strict legal repair round={} inputs={} selected={} conflict_skipped={} proposed={} committed={} rejected={} snapshot_round={} global_gated={} rolled_back={} total_overflow={} max_overflow={} box={} edge_quota={} proposal_ms={:.3f} commit_ms={:.3f}",
                     round, inputs.size(), selected.size(), conflict_skipped, proposed,
-                    committed, rejected, use_snapshot_commit, rolled_back,
+                    committed, rejected, use_snapshot_commit, global_gated, rolled_back,
                     stats.total_overflow, stats.max_overflow, repair_box, edge_quota,
                     proposal_ms_value, commit_ms_value);
         }
@@ -2367,9 +2444,9 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     }
 
     if (do_log) {
-        log_sp->info("v8 strict legal repair phase inputs={} selected={} proposed={} committed={} rejected={} rolled_back={} total_overflow={} max_overflow={} proposal_ms={:.3f} commit_ms={:.3f}",
+        log_sp->info("v8 strict legal repair phase inputs={} selected={} proposed={} committed={} rejected={} global_gated={} rolled_back={} total_overflow={} max_overflow={} proposal_ms={:.3f} commit_ms={:.3f}",
                 total_inputs, total_selected, total_proposed, total_committed,
-                total_rejected, total_rolled_back, stats.total_overflow,
+                total_rejected, total_global_gated, total_rolled_back, stats.total_overflow,
                 stats.max_overflow, total_proposal_ms, total_commit_ms);
     }
 }
