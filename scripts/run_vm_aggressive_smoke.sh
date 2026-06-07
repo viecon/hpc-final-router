@@ -350,7 +350,6 @@ if strategy_enabled frontier_openmp_control_v5a; then
     NTHU_ADAPTIVE_REPAIR_P3_BOX_INC=122
     NTHU_FINAL_FULL_REMAINDER_REPAIR_LIMIT=80
     NTHU_FINAL_FULL_REMAINDER_REPAIR_ROUNDS=6
-    NTHU_PROFILE=1
   )
   run_one frontier_openmp_control_v5a easy newblue2.fastplace90.3d.50.20.100 230 "$frontier_args" "${common_candidate[@]}"
   run_one frontier_openmp_control_v5a hard adaptec4.aplace60.3d.30.50.90 392 "$frontier_args" "${common_candidate[@]}"

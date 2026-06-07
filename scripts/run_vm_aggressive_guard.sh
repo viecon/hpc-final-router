@@ -199,7 +199,6 @@ case "$STRATEGY" in
       NTHU_ADAPTIVE_REPAIR_P3_BOX_INC=122
       NTHU_FINAL_FULL_REMAINDER_REPAIR_LIMIT=80
       NTHU_FINAL_FULL_REMAINDER_REPAIR_ROUNDS=6
-      NTHU_PROFILE=1
     )
     ;;
   frontier_openmp_conflict_batch_v5)

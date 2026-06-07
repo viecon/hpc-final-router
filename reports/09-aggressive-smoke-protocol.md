@@ -491,6 +491,56 @@ References used for this experiment design:
   Router", ICCAD 2019, DOI: `10.1109/ICCAD45719.2019.8942105`.
   <https://eurekamag.com/research/102/862/102862952.php>
 
+### v5 Smoke / OpenMP Findings
+
+Support issue:
+
+- `frontier_openmp_conflict_batch_v5_c0ce0d9_001` produced no rows because the
+  VM host shell has no `cmake`; this is a runner/build setup failure
+  (`exit_code=127`), not an algorithm result.
+- Reusing an old OpenMP build produced bad WL (`newblue2` WL ratio `1.426x`,
+  `adaptec4` WL ratio `1.321x`).  A current-source OpenMP build was therefore
+  rebuilt inside `router.sif`:
+
+```text
+/home/ubuntu/hpc-final-router/external/nthu-route/build-release-vm-openmp-current
+```
+
+Current-source smoke results:
+
+| Strategy / run | Benchmark | Seconds | Speedup vs original | WL ratio | Overflow |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `frontier_openmp_control_v5a` | `newblue2` | 40.802 | 1.875x | 1.159 | 0 / 0 |
+| `frontier_openmp_control_v5a` | `adaptec4` | 86.754 | 1.506x | 1.110 | 0 / 0 |
+| `frontier_openmp_conflict_batch_v5` (`max_candidates=2048`) | `newblue2` | 39.980 | 1.914x | 1.161 | 0 / 0 |
+| `frontier_openmp_conflict_batch_v5` (`max_candidates=2048`) | `adaptec4` | 85.577 | 1.527x | 1.110 | 0 / 0 |
+| `frontier_openmp_conflict_batch_v5` (`max_candidates=8192`) | `newblue2` | 41.567 | 1.841x | 1.161 | 0 / 0 |
+| `frontier_openmp_conflict_batch_v5` (`max_candidates=8192`) | `adaptec4` | 86.405 | 1.512x | 1.110 | 0 / 0 |
+
+Result roots:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_openmp_control_v5a_e75f115_current_001
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_openmp_conflict_batch_v5_c0ce0d9_current_001
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_openmp_conflict_batch_v5_c0ce0d9_current_max8192_001
+```
+
+Classification:
+
+- Current-source OpenMP control keeps WL and legality close to v4, but smoke
+  speedup over v4 is small (`newblue2`: about `1.01x`; `adaptec4`: about
+  `1.03x`).
+- Conflict batching is not rejected for correctness on smoke, but it does not
+  clearly beat the OpenMP-control run.  Increasing parallel candidates from
+  `2048` to `8192` increases scheduling/fallback work and slows `newblue2`.
+- Profile evidence for `max_candidates=2048`: `newblue2` had
+  `parallel_inputs=2048` but `serial_tail=158989`; `adaptec4` had
+  `parallel_inputs=2048` with serial tails of `178210` and `78626` across the
+  first two P2 iterations.  This explains why CPU utilization is still close to
+  one core for most of the run.
+- v5a is being expanded to `legal7` as the safer OpenMP control.  Conflict
+  batching remains an experimental branch, not the current best candidate.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:
