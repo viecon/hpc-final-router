@@ -1272,6 +1272,57 @@ Next run:
   `NTHU_V8_REJECT_COOLDOWN=1`;
 - easy smoke must be legal before hard is run.
 
+### v8.4 Cooldown-Only Result
+
+Commit:
+
+```text
+d3718d6 Disable v8 low-edge oversubscribe default
+```
+
+Run roots:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_d3718d6_smoke_007_easy_cooldown_14t
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_d3718d6_smoke_008_hard_cooldown_14t
+```
+
+Result:
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.4 | 16k/r6 + reject cooldown only | `newblue2` | 65.073779 | 76.516170 | 1.176x | 1.158 | 0 / 0 | legal, faster |
+| v8.4 | same | `adaptec4` | 129.601816 | 130.666544 | 1.008x | 1.111 | 2 / 2 | rejected, illegal |
+
+Diagnosis:
+
+- The direct proposal path is truly parallel in the high-overflow phase.  On
+  hard smoke, the `NthuRoute` process ran with 14 OpenMP threads and reached
+  about 4x-6x CPU during proposal generation.
+- The remaining failure is the low-overflow tail.  The log repeatedly shows
+  `low_overflow=1`, `selected=1`, `committed=0`, so the conflict selector and
+  local improvement commit keep retrying safe-looking candidates without
+  reducing the final global overflow.
+- v8.4 is not expanded to `legal7`, because the hard smoke is originally legal
+  but ends with evaluator `total_overflow=2,max_overflow=2`.
+
+### v8.5 Low-Tail Global Commit Plan
+
+Code change:
+
+- keep v8 direct hot-set scanning and proposal-only path generation;
+- after the normal proposal phase, if measured total overflow is small
+  (`NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT`, default 16), collect the remaining
+  overflowed two-pin paths;
+- propose candidate paths in parallel on the current congestion snapshot;
+- commit proposals sequentially and deterministically only if global
+  `total_overflow` decreases and `max_overflow` does not increase.
+
+This is the safe replacement for v8.3 oversubscribe.  It still follows the
+paper-inspired proposal/commit structure, but the low-tail commit gate is global
+instead of local, so one locally acceptable candidate cannot silently increase
+overall overflow.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:
