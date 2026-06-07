@@ -3258,3 +3258,101 @@ Literature mapping for the v8.52/v8.53 direction:
   Router with Soft Capacity", ASP-DAC 2022. The relevant idea is deterministic
   batch routing; our branch borrows the bulk-synchronous batch concept, not the
   soft-capacity model.
+
+v8.53 dynamic strict-repair batch freeing:
+
+Implementation:
+
+- Commit `983b042`.
+- Adds `NTHU_V8_STRICT_LEGAL_REPAIR_DYNAMIC_EDGE_QUOTA`.
+- Connects the existing `NTHU_V8_STRICT_REPAIR_ALLOW_SAME_NET` parser to the
+  strict repair selector.
+- With dynamic quota, an overflow edge with overuse `k` can select up to
+  `max(edge_quota, k + 1)` related twopins in one repair wave. This fixes the
+  v8.52 failure mode where removing one twopin from a heavily overused edge did
+  not free enough capacity for strict legal search.
+
+v8.53 smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_983b042_smoke_easyhard_txwaves_strictdyn_v8_53_openmp14t
+commit=983b042
+NTHU_V8_TRANSACTIONAL_PROPOSAL_WAVES=1
+NTHU_V8_STRICT_LEGAL_REPAIR_DYNAMIC_EDGE_QUOTA=1
+NTHU_V8_STRICT_REPAIR_ALLOW_SAME_NET=1
+NTHU_V8_STRICT_LEGAL_REPAIR_OVERFLOW_NET_INPUTS=1
+NTHU_V8_STRICT_LEGAL_REPAIR_MAX_OVERFLOW=4096
+NTHU_V8_STRICT_LEGAL_REPAIR_BATCH_SIZE=512
+NTHU_V8_STRICT_LEGAL_REPAIR_EDGE_QUOTA=8
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.53 | `newblue2` | 138.059295 | 76.516170 | 0.554x | 8811878 | 1.160x | 508 / 4 | rejected; illegal |
+| v8.53 | `adaptec4` | killed after easy failure | 130.666544 | NA | NA | NA | NA | killed |
+
+Evidence:
+
+```text
+v8 strict legal repair selected hundreds of twopins and committed useful moves:
+  round=1 selected=512 proposed=512 committed=275 total_overflow=603 max=28
+  later low-tail: total_overflow=254 max=6
+final layer assignment:
+  3D # overflow=508
+  3D max overflow=4
+```
+
+Classification:
+
+- Dynamic strict repair worked mechanically: the selector no longer starves at
+  `selected=5`.
+- It did not solve legality by itself. The low-tail state still needs the
+  dedicated global/self-ripup repair that earlier v8.18 showed can clear
+  `newblue2`.
+
+v8.54 post-only low-tail 512 config probe:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_983b042_smoke_easyhard_txwaves_strictdyn_posttail512_v8_54_openmp14t
+commit=983b042
+same v8.53 config plus:
+NTHU_V8_LOW_TAIL_POST_ONLY=1
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT=512
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_MAX_CANDIDATES=1024
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_ROUNDS=8
+NTHU_V8_LOW_TAIL_BOX_INC=160
+NTHU_V8_LOW_TAIL_SELF_RIPUP_MAX_TESTS=256
+NTHU_V8_LOW_TAIL_SELF_RIPUP_BOX_INC=192
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.54 | `newblue2` | 146.751952 | 76.516170 | 0.521x | 8817275 | 1.161x | 0 / 0 | legal but slow |
+| v8.54 | `adaptec4` | timeout at 392 | 130.666544 | <0.333x | NA | NA | NA | rejected; timeout |
+
+Evidence:
+
+```text
+newblue2 post-only low-tail:
+  total_overflow=32 -> 11 -> 4
+  self-ripup: total_overflow=4 -> 0
+  2D sum overflow=0
+  checker total_overflow=0 max_overflow=0
+adaptec4 before timeout:
+  total_overflow remained around 9653
+  strict repair skipped because max_total=4096
+```
+
+Classification:
+
+- v8.54 proves that the v8.53 code can recover legality on the easy smoke row
+  when low-tail repair is scheduled only in post/P3.
+- It is still rejected because `adaptec4` does not enter strict repair early
+  enough and times out above the 4096 strict-repair threshold.
+- Next probe: expose and enable strict-repair no-progress rollback, then try a
+  moderate high-overflow strict threshold rather than the earlier v8.40 50k
+  setting.
