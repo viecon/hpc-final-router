@@ -593,6 +593,63 @@ Smoke rule:
 - if smoke is legal and not slower, expand to `legal7`; otherwise keep v4/v5a
   as the best legal baseline.
 
+### v7 Proposal-Only Phased Reroute Candidate
+
+Previous legal baselines:
+
+```text
+frontier_adaptive_late_score1_v4
+frontier_openmp_control_v5a
+```
+
+Implementation delta:
+
+- replace in-place reroute execution with phases when
+  `NTHU_PROPOSAL_REROUTE_BATCHES=1`:
+  1. collect overflow two-pin candidates using the existing NTHU candidate
+     order;
+  2. generate route proposals on a read-only congestion snapshot using
+     per-thread local `MonotonicRouting` and local
+     `Multisource_multisink_mazeroute`;
+  3. deterministically validate and commit proposed paths to the shared
+     congestion map;
+- do not call serial `range_router()` as a fallback inside the v7 proposal
+  path.  A failed proposal is skipped and must be handled by later NTHU repair
+  rounds;
+- rebuild the local maze net tree from current two-pin endpoints so proposal
+  maze routing can see rerouted Steiner endpoints without mutating the shared
+  router tree;
+- route P3 post-processing through `route_twopin_candidates(..., version=3)`
+  so v7 covers post-processing too.  With proposal mode disabled this remains
+  the old serial behavior.
+
+Fixed v7 config under test:
+
+```text
+frontier_proposal_reroute_v7
+NTHU_PROPOSAL_REROUTE_BATCHES=1
+NTHU_PROPOSAL_REROUTE_MAZE=1
+NTHU_PROPOSAL_REROUTE_LOG=1
+NTHU_PROPOSAL_REROUTE_MAX_CANDIDATES=0
+```
+
+Paper mapping:
+
+- NCTU-GR 2.0 motivates collision-aware/task-style routing instead of blind
+  shared-state mutation.
+- DSD 2013 overlapped routing regions uses parallel search and exclusive
+  update/commit; v7 follows the same proposal/commit split at net granularity.
+- SPRoute motivates phased/adaptive parallel routing where unsuccessful
+  proposals are not forced through unsafe concurrent commits.
+
+Smoke rule:
+
+- run only the standard easy/hard smoke first;
+- use the existing 3x-original kill gate;
+- if smoke is legal and not slower than the legal baseline family, expand to
+  `legal7`; otherwise classify as implementation/support issue or invalid
+  optimization logic before trying another aggressive direction.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:

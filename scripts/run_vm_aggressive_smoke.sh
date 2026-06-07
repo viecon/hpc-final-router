@@ -39,6 +39,7 @@ frontier_netguided_adaptive_repair_v3,frontier_edgecount_netguided_v2,same fast 
 frontier_adaptive_late_score1_v4,frontier_netguided_adaptive_repair_v3,same adaptive frontier but allows late P2 repair to reroute score-1 residual overflow and gives final full-remainder repair more rounds,internal legality repair follow-up; no new paper claim
 frontier_openmp_control_v5a,frontier_adaptive_late_score1_v4,run the v4 frontier on a current-source OpenMP build without conflict-batch reroute; isolates safe OpenMP loop speedup from batching effects,OpenMP control experiment
 frontier_direct_residual_v6,frontier_adaptive_late_score1_v4,add routing-state residual direct-overflow repair before full-remainder fallback to reduce low-overflow repair cost,NCTU-GR/SPRoute-style conflict-aware repair narrowing without benchmark-specific branching
+frontier_proposal_reroute_v7,frontier_adaptive_late_score1_v4,replace in-place serial reroute calls with collect/propose/deterministic-commit phases using local per-thread routing proposals,NCTU-GR collision-aware task scheduling; SPRoute adaptive proposal/commit direction
 frontier_openmp_conflict_batch_v5,frontier_adaptive_late_score1_v4,enable OpenMP conflict-box reroute batching on the v4 frontier to test in-process parallelism without benchmark-specific routing changes,NCTU-GR 2.0 collision-aware task scheduling; Shintani et al. overlapped-region candidate/commit model
 CSV
 
@@ -394,6 +395,47 @@ if strategy_enabled frontier_direct_residual_v6; then
   )
   run_one frontier_direct_residual_v6 easy newblue2.fastplace90.3d.50.20.100 230 "$frontier_args" "${common_candidate[@]}"
   run_one frontier_direct_residual_v6 hard adaptec4.aplace60.3d.30.50.90 392 "$frontier_args" "${common_candidate[@]}"
+fi
+
+if strategy_enabled frontier_proposal_reroute_v7; then
+  frontier_args="--p2-init-box-size=5 --p2-box-expand-size=5 --overflow-threshold=10000 --p2-max-iteration=5 --p3-max-iteration=2 --p3-init-box-size=54 --p3-box-expand-size=88"
+  common_candidate=(
+    NTHU_FAST_GREEDY_LAYER=1
+    NTHU_FAST_GREEDY_LAYER_NET_GUIDED=1
+    NTHU_NET_GUIDED_LOW_LAYER_FIRST=1
+    NTHU_DOGLEG_FASTPATH=1
+    NTHU_DOGLEG_MAX_EXTRA=0
+    NTHU_DOGLEG_MIN_SCORE=1
+    NTHU_DOGLEG_STEP=8
+    NTHU_RANGE_SKIP_REMAINDER=1
+    NTHU_REROUTE_SCORE_P2_ONLY=1
+    NTHU_REROUTE_MIN_OVERFLOW_SCORE=5
+    NTHU_REROUTE_LATE_SCORE_AFTER_ITER=4
+    NTHU_REROUTE_LATE_MIN_OVERFLOW_SCORE=1
+    NTHU_POST_SORT_MODE=edge_count
+    NTHU_POST_OVERFLOW_LIMIT_AFTER_FIRST=240
+    NTHU_ADAPTIVE_LEGAL_REPAIR=1
+    NTHU_ADAPTIVE_POST_ONLY_OVERFLOW_LIMIT=10
+    NTHU_ADAPTIVE_REPAIR_P2_MAX_ITER=8
+    NTHU_ADAPTIVE_HIGH_OVERFLOW_P2_TRIGGER=200
+    NTHU_ADAPTIVE_HIGH_OVERFLOW_P2_MAX_ITER=16
+    NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_LIMIT=50
+    NTHU_ADAPTIVE_SMALL_OVERFLOW_P2_ROUNDS=1
+    NTHU_ADAPTIVE_INITIAL_P3_MAX_ITER=2
+    NTHU_ADAPTIVE_INITIAL_P3_INIT_BOX=54
+    NTHU_ADAPTIVE_INITIAL_P3_BOX_INC=88
+    NTHU_ADAPTIVE_REPAIR_P3_MAX_ITER=12
+    NTHU_ADAPTIVE_REPAIR_P3_INIT_BOX=66
+    NTHU_ADAPTIVE_REPAIR_P3_BOX_INC=122
+    NTHU_FINAL_FULL_REMAINDER_REPAIR_LIMIT=80
+    NTHU_FINAL_FULL_REMAINDER_REPAIR_ROUNDS=6
+    NTHU_PROPOSAL_REROUTE_BATCHES=1
+    NTHU_PROPOSAL_REROUTE_MAZE=1
+    NTHU_PROPOSAL_REROUTE_LOG=1
+    NTHU_PROPOSAL_REROUTE_MAX_CANDIDATES=0
+  )
+  run_one frontier_proposal_reroute_v7 easy newblue2.fastplace90.3d.50.20.100 230 "$frontier_args" "${common_candidate[@]}"
+  run_one frontier_proposal_reroute_v7 hard adaptec4.aplace60.3d.30.50.90 392 "$frontier_args" "${common_candidate[@]}"
 fi
 
 if strategy_enabled frontier_openmp_conflict_batch_v5; then

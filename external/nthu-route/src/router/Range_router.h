@@ -98,6 +98,10 @@ public:
     void range_router(Two_pin_element_2d& two_pin, int version);
     bool range_router(Two_pin_element_2d& two_pin, int version, MonotonicRouting* local_monotonic,
             Multisource_multisink_mazeroute* local_maze, bool allow_maze);
+    bool propose_reroute_path(const Two_pin_element_2d& two_pin, int version,
+            MonotonicRouting& local_monotonic, Multisource_multisink_mazeroute* local_maze,
+            bool allow_maze, std::vector<Coordinate_2d>& proposed_path);
+    bool commit_reroute_proposal(Two_pin_element_2d& two_pin, const std::vector<Coordinate_2d>& proposed_path, int version);
     void route_twopin_candidates(std::vector<Two_pin_element_2d*>& twopin_list, int version);
     bool try_l_shape_fastpath(Two_pin_element_2d& two_pin);
     bool try_dogleg_fastpath(Two_pin_element_2d& two_pin);

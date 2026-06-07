@@ -41,7 +41,8 @@ Multisource_multisink_mazeroute::Multisource_multisink_mazeroute(Construct_2d_tr
         mmm_map { boost::extents[congestion.congestionMap2d.getXSize()][congestion.congestionMap2d.getYSize()] }, //
         element { }, //
         pin1_v { }, //
-        pin2_v { } {
+        pin2_v { }, //
+        rebuild_tree_from_twopins { false } {
     /*allocate space for mmm_map*/
     log_sp = spdlog::get("NTHUR");
     net_tree.resize(construct_2d_tree.rr_map.get_netNumber());
@@ -58,6 +59,44 @@ Multisource_multisink_mazeroute::Multisource_multisink_mazeroute(Construct_2d_tr
     visit_counter = 0;
     dst_counter = 0;
 
+}
+
+void Multisource_multisink_mazeroute::set_rebuild_tree_from_twopins(bool enabled) {
+    rebuild_tree_from_twopins = enabled;
+}
+
+bool Multisource_multisink_mazeroute::setup_net_tree_from_twopins(int net_id) {
+    vector<Vertex_mmm>& vertexV = net_tree[net_id];
+    vertexV.clear();
+    vertexV.reserve(construct_2d_tree.two_pin_list.size() * 2);
+
+    std::unordered_map<Coordinate_2d, int> indexmap;
+    indexmap.reserve(construct_2d_tree.two_pin_list.size() * 2);
+    auto add_vertex = [&](const Coordinate_2d& c) -> int {
+        auto found = indexmap.find(c);
+        if (found != indexmap.end()) {
+            return found->second;
+        }
+        const int index = static_cast<int>(vertexV.size());
+        indexmap.emplace(c, index);
+        vertexV.emplace_back(c);
+        return index;
+    };
+
+    for (const Two_pin_element_2d& two_pin : construct_2d_tree.two_pin_list) {
+        if (two_pin.net_id != net_id) {
+            continue;
+        }
+        const int lhs = add_vertex(two_pin.pin1);
+        const int rhs = add_vertex(two_pin.pin2);
+        if (lhs == rhs) {
+            continue;
+        }
+        vertexV[lhs].neighbor.push_back(&vertexV[rhs]);
+        vertexV[rhs].neighbor.push_back(&vertexV[lhs]);
+    }
+
+    return !vertexV.empty();
 }
 
 /*recursively traverse parent in maze_routing_map to find path*/
@@ -157,34 +196,40 @@ void Multisource_multisink_mazeroute::setup_pqueue() {
     int cur_net = element->net_id;
     vector<Vertex_mmm>& vertexV = net_tree[cur_net];
     if (vertexV.empty()) {
-        const TreeFlute& t = construct_2d_tree.net_flutetree[cur_net];
+        if (rebuild_tree_from_twopins && setup_net_tree_from_twopins(cur_net)) {
+            // The proposal router uses a per-thread maze instance.  Rebuild the
+            // local topology from the current two-pin endpoints so rerouted
+            // Steiner endpoints are present without touching shared state.
+        } else {
+            const TreeFlute& t = construct_2d_tree.net_flutetree[cur_net];
 
-        if (log_sp->level() == spdlog::level::trace) {
-            log_sp->trace(t.plot());
-        }
-        vertexV.reserve(t.number); // avoid re allocation that could invalidate pointer
-
-        std::unordered_map<Coordinate_2d, int> indexmap;
-        indexmap.reserve(t.number);
-
-        for (int i = 0; i < t.number; ++i) {
-
-            Coordinate_2d c { (int) t.branch[i].x, (int) t.branch[i].y };
-            bool inserted = indexmap.insert( { c, static_cast<int>(vertexV.size()) }).second;
-            if (inserted) {
-                vertexV.emplace_back(c);
+            if (log_sp->level() == spdlog::level::trace) {
+                log_sp->trace(t.plot());
             }
-        }
+            vertexV.reserve(t.number); // avoid re allocation that could invalidate pointer
 
-        for (int i = 0; i < t.number; ++i) {
-            Branch b = t.branch[i];
-            Coordinate_2d c1 { (int) b.x, (int) b.y };
-            Coordinate_2d c2 { (int) t.branch[b.n].x, (int) t.branch[b.n].y };
-            Vertex_mmm& v1 = vertexV.at(indexmap.at(c1));
-            Vertex_mmm& v2 = vertexV.at(indexmap.at(c2));
-            if (v1.coor != v2.coor) {
-                v1.neighbor.push_back(&v2);
-                v2.neighbor.push_back(&v1);
+            std::unordered_map<Coordinate_2d, int> indexmap;
+            indexmap.reserve(t.number);
+
+            for (int i = 0; i < t.number; ++i) {
+
+                Coordinate_2d c { (int) t.branch[i].x, (int) t.branch[i].y };
+                bool inserted = indexmap.insert( { c, static_cast<int>(vertexV.size()) }).second;
+                if (inserted) {
+                    vertexV.emplace_back(c);
+                }
+            }
+
+            for (int i = 0; i < t.number; ++i) {
+                Branch b = t.branch[i];
+                Coordinate_2d c1 { (int) b.x, (int) b.y };
+                Coordinate_2d c2 { (int) t.branch[b.n].x, (int) t.branch[b.n].y };
+                Vertex_mmm& v1 = vertexV.at(indexmap.at(c1));
+                Vertex_mmm& v2 = vertexV.at(indexmap.at(c2));
+                if (v1.coor != v2.coor) {
+                    v1.neighbor.push_back(&v2);
+                    v2.neighbor.push_back(&v1);
+                }
             }
         }
     }

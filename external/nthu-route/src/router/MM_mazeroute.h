@@ -127,9 +127,11 @@ public:
 
     bool mm_maze_route_p(Two_pin_element_2d&element, double bound_cost, int bound_distance, int bound_via_num, Coordinate_2d& start, Coordinate_2d& end, int version, int max_path_edges = -1);
     void clear_net_tree();
+    void set_rebuild_tree_from_twopins(bool enabled);
 
 private:
     void setup_pqueue();
+    bool setup_net_tree_from_twopins(int net_id);
     void find_subtree(Vertex_mmm& v, int mode);
     void adjust_twopin_element();
     void trace_back_to_find_path_2d(MMM_element *end_point);
@@ -155,6 +157,7 @@ private:
     Vertex_mmm* pin2_v;	//source,destination
     int visit_counter;
     int dst_counter;
+    bool rebuild_tree_from_twopins;
     std::shared_ptr<spdlog::logger> log_sp;
 };
 

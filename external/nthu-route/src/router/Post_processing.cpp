@@ -319,6 +319,8 @@ void Post_processing::initial_for_post_processing(int post_iteration) {
     }
     int routed_overflow_candidates = 0;
     int skipped_low_score_candidates = 0;
+    std::vector<Two_pin_element_2d*> reroute_candidates;
+    reroute_candidates.reserve(pin_count);
 
     // According other attribute to do maze routing
     const auto reroute_start = ProfileClock::now();
@@ -338,11 +340,12 @@ void Post_processing::initial_for_post_processing(int post_iteration) {
                 continue;
             }
             ++routed_overflow_candidates;
-            rangeRouter.range_router(twopList, 3);
+            reroute_candidates.push_back(&twopList);
         } else if (neighbor_candidate[id]) {
-            rangeRouter.range_router(twopList, 3);
+            reroute_candidates.push_back(&twopList);
         }
     }
+    rangeRouter.route_twopin_candidates(reroute_candidates, 3);
     const double reroute_ms = profile_ms(reroute_start, ProfileClock::now());
     if (post_overflow_limit > 0) {
         log_sp->info("post overflow candidate limit: routed={} limit={}", routed_overflow_candidates, post_overflow_limit);

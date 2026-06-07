@@ -16,6 +16,7 @@
 #include <limits>
 #include <queue>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -195,6 +196,30 @@ int direct_overflow_candidate_limit() {
 
 bool parallel_reroute_batches_enabled() {
     return std::getenv("NTHU_PARALLEL_REROUTE_BATCHES") != nullptr;
+}
+
+bool proposal_reroute_batches_enabled() {
+    return std::getenv("NTHU_PROPOSAL_REROUTE_BATCHES") != nullptr;
+}
+
+bool proposal_reroute_maze_enabled() {
+    return std::getenv("NTHU_PROPOSAL_REROUTE_MAZE") != nullptr;
+}
+
+bool proposal_reroute_log_enabled() {
+    return std::getenv("NTHU_PROPOSAL_REROUTE_LOG") != nullptr;
+}
+
+int proposal_reroute_max_candidates() {
+    const char* value = std::getenv("NTHU_PROPOSAL_REROUTE_MAX_CANDIDATES");
+    if (value == nullptr || *value == '\0') {
+        return std::numeric_limits<int>::max();
+    }
+    const int parsed = std::atoi(value);
+    if (parsed <= 0) {
+        return std::numeric_limits<int>::max();
+    }
+    return parsed;
 }
 
 bool parallel_reroute_log_enabled() {
@@ -552,6 +577,8 @@ struct RangeProfile {
     double insert_ms = 0;
     double cuda_prepare_ms = 0;
     double cuda_maze_ms = 0;
+    double proposal_ms = 0;
+    double proposal_commit_ms = 0;
     int ranges = 0;
     int candidates = 0;
     int route_calls = 0;
@@ -571,10 +598,23 @@ struct RangeProfile {
     int parallel_inputs = 0;
     int parallel_serialized_inputs = 0;
     int parallel_max_batch = 0;
+    int proposal_inputs = 0;
+    int proposal_success = 0;
+    int proposal_commits = 0;
+    int proposal_commit_rejects = 0;
+    int proposal_skipped = 0;
 
     void reset() {
         *this = RangeProfile {};
     }
+};
+
+struct RerouteProposal {
+    NTHUR::Two_pin_element_2d* two_pin = nullptr;
+    std::vector<NTHUR::Coordinate_2d> path;
+    bool proposed = false;
+    bool committed = false;
+    bool rejected = false;
 };
 
 struct RerouteCandidateBox {
@@ -1405,7 +1445,236 @@ bool NTHUR::RangeRouter::try_dogleg_fastpath(Two_pin_element_2d& two_pin) {
     return true;
 }
 
+bool NTHUR::RangeRouter::propose_reroute_path(const Two_pin_element_2d& two_pin, int version,
+        MonotonicRouting& local_monotonic, Multisource_multisink_mazeroute* local_maze,
+        bool allow_maze, std::vector<Coordinate_2d>& proposed_path) {
+    proposed_path.clear();
+    if (congestion.check_path_no_overflow(two_pin.path, two_pin.net_id, false)) {
+        return false;
+    }
+
+    int old_path_overflow_score = 0;
+    for (int i = static_cast<int>(two_pin.path.size()) - 2; i >= 0; --i) {
+        const Edge_2d& edge = congestion.congestionMap2d.edge(two_pin.path[i], two_pin.path[i + 1]);
+        old_path_overflow_score += std::max(0, edge.overUsage());
+    }
+
+    int min_reroute_score = reroute_min_overflow_score();
+    const int score_until_iter = reroute_score_until_iter();
+    const int late_score_after_iter = reroute_late_score_after_iter();
+    const int late_min_reroute_score = reroute_late_min_overflow_score();
+    const bool require_post_improvement = version == 3 && post_accept_improvement_enabled();
+    if (version == 2 && late_score_after_iter >= 0 && late_min_reroute_score > 0 &&
+            congestion.cur_iter > late_score_after_iter) {
+        min_reroute_score = late_min_reroute_score;
+    }
+    if ((version == 3 && reroute_score_p2_only_enabled()) ||
+            (score_until_iter >= 0 && (version == 3 || congestion.cur_iter > score_until_iter))) {
+        min_reroute_score = 1;
+    }
+    if (min_reroute_score > 1 && old_path_overflow_score < min_reroute_score) {
+        return false;
+    }
+
+    Two_pin_element_2d candidate(two_pin);
+    const std::vector<Coordinate_2d> original_path(two_pin.path);
+    std::vector<Coordinate_2d> bound_path(two_pin.path);
+
+    Bound bound;
+    bool find_path_flag = false;
+    if (dogleg_fastpath_enabled() && old_path_overflow_score >= dogleg_min_overflow_score()) {
+        find_path_flag = try_dogleg_fastpath(candidate);
+        if (find_path_flag) {
+            bound_path = candidate.path;
+        }
+    } else if (l_shape_fastpath_enabled()) {
+        find_path_flag = try_l_shape_fastpath(candidate);
+        if (find_path_flag) {
+            bound_path = candidate.path;
+        }
+    }
+
+    if (!find_path_flag) {
+        find_path_flag = local_monotonic.monotonicRoute(candidate, bound, bound_path);
+    } else {
+        Monotonic_element mn;
+        local_monotonic.compute_path_total_cost_and_distance(candidate, mn);
+        bound.cost = mn.total_cost;
+        bound.distance = mn.distance;
+        bound.via_num = mn.via_num;
+        bound.flag = true;
+    }
+
+    bool new_path_has_overflow = false;
+    if (find_path_flag) {
+        new_path_has_overflow = !congestion.check_path_no_overflow(bound_path, candidate.net_id, true);
+    }
+
+    if ((!find_path_flag || new_path_has_overflow) && allow_maze && local_maze != nullptr) {
+        Coordinate_2d start;
+        Coordinate_2d end;
+
+        start.x = min(two_pin.pin1.x, two_pin.pin2.x);
+        start.y = min(two_pin.pin1.y, two_pin.pin2.y);
+        end.x = max(two_pin.pin1.x, two_pin.pin2.x);
+        end.y = max(two_pin.pin1.y, two_pin.pin2.y);
+
+        int size = construct_2d_tree.BOXSIZE_INC;
+        start.x = max(0, start.x - size);
+        start.y = max(0, start.y - size);
+        end.x = min(construct_2d_tree.rr_map.get_gridx() - 1, end.x + size);
+        end.y = min(construct_2d_tree.rr_map.get_gridy() - 1, end.y + size);
+
+        candidate = two_pin;
+        const bool bounded_length_enabled_this_phase =
+                bounded_length_phase_enabled(version, congestion.cur_iter);
+        const int max_path_edges =
+                bounded_length_enabled_this_phase ? bounded_length_limit(original_path) : -1;
+        find_path_flag = local_maze->mm_maze_route_p(candidate, bound.cost, bound.distance,
+                bound.via_num, start, end, version, max_path_edges);
+    }
+
+    if (!find_path_flag || candidate.path.size() < 2) {
+        return false;
+    }
+
+    const bool bounded_length_enabled_this_phase =
+            bounded_length_phase_enabled(version, congestion.cur_iter);
+    if (bounded_length_enabled_this_phase &&
+            path_edges(candidate.path) > bounded_length_limit(original_path)) {
+        return false;
+    }
+
+    if (require_post_improvement) {
+        const int new_path_overflow_score =
+                inserted_path_overflow_score(candidate.path, candidate.net_id, congestion);
+        if (new_path_overflow_score + post_accept_min_delta() > old_path_overflow_score) {
+            return false;
+        }
+    }
+
+    proposed_path = std::move(candidate.path);
+    return true;
+}
+
+bool NTHUR::RangeRouter::commit_reroute_proposal(Two_pin_element_2d& two_pin,
+        const std::vector<Coordinate_2d>& proposed_path, int version) {
+    if (proposed_path.size() < 2 ||
+            congestion.check_path_no_overflow(two_pin.path, two_pin.net_id, false)) {
+        return false;
+    }
+
+    const std::vector<Coordinate_2d> original_path(two_pin.path);
+    const Coordinate_2d original_pin1 = two_pin.pin1;
+    const Coordinate_2d original_pin2 = two_pin.pin2;
+
+    congestion.update_congestion_map_remove_two_pin_net(original_path, two_pin.net_id);
+    if (!congestion.check_path_no_overflow(proposed_path, two_pin.net_id, true)) {
+        two_pin.path = original_path;
+        two_pin.pin1 = original_pin1;
+        two_pin.pin2 = original_pin2;
+        congestion.update_congestion_map_insert_two_pin_net(two_pin);
+        return false;
+    }
+
+    two_pin.path = proposed_path;
+    two_pin.pin1 = two_pin.path.front();
+    two_pin.pin2 = two_pin.path.back();
+    if (version == 2) {
+        two_pin.done = construct_2d_tree.done_iter;
+    }
+    construct_2d_tree.NetDirtyBit[two_pin.net_id] = true;
+    congestion.update_congestion_map_insert_two_pin_net(two_pin);
+    return true;
+}
+
 void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*>& twopin_list, int version) {
+    if (proposal_reroute_batches_enabled() && !twopin_list.empty()) {
+        const bool do_profile = profile_enabled();
+        const bool do_log = do_profile || proposal_reroute_log_enabled();
+        const auto proposal_start = ProfileClock::now();
+        std::vector<Two_pin_element_2d*> overflow_twopins;
+        overflow_twopins.reserve(twopin_list.size());
+        for (Two_pin_element_2d* two_pin : twopin_list) {
+            if (!congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false)) {
+                overflow_twopins.push_back(two_pin);
+            }
+        }
+        if (overflow_twopins.empty()) {
+            return;
+        }
+
+        const int max_candidates = proposal_reroute_max_candidates();
+        if (max_candidates < static_cast<int>(overflow_twopins.size())) {
+            overflow_twopins.resize(max_candidates);
+        }
+
+        std::vector<RerouteProposal> proposals(overflow_twopins.size());
+        const bool allow_maze = proposal_reroute_maze_enabled();
+
+#ifdef NTHU_ROUTE_OPENMP
+#pragma omp parallel
+        {
+            MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
+            Multisource_multisink_mazeroute local_maze(construct_2d_tree, congestion);
+            local_maze.set_rebuild_tree_from_twopins(true);
+#pragma omp for schedule(dynamic, 1)
+            for (int i = 0; i < static_cast<int>(overflow_twopins.size()); ++i) {
+                proposals[i].two_pin = overflow_twopins[i];
+                proposals[i].proposed = propose_reroute_path(*overflow_twopins[i], version,
+                        local_monotonic, allow_maze ? &local_maze : nullptr, allow_maze,
+                        proposals[i].path);
+            }
+        }
+#else
+        MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
+        Multisource_multisink_mazeroute local_maze(construct_2d_tree, congestion);
+        local_maze.set_rebuild_tree_from_twopins(true);
+        for (int i = 0; i < static_cast<int>(overflow_twopins.size()); ++i) {
+            proposals[i].two_pin = overflow_twopins[i];
+            proposals[i].proposed = propose_reroute_path(*overflow_twopins[i], version,
+                    local_monotonic, allow_maze ? &local_maze : nullptr, allow_maze,
+                    proposals[i].path);
+        }
+#endif
+
+        const double proposal_ms_value = profile_ms(proposal_start, ProfileClock::now());
+        const auto commit_start = ProfileClock::now();
+        int proposal_success = 0;
+        int proposal_commits = 0;
+        int proposal_rejects = 0;
+        for (RerouteProposal& proposal : proposals) {
+            if (!proposal.proposed) {
+                continue;
+            }
+            ++proposal_success;
+            if (commit_reroute_proposal(*proposal.two_pin, proposal.path, version)) {
+                proposal.committed = true;
+                ++proposal_commits;
+            } else {
+                proposal.rejected = true;
+                ++proposal_rejects;
+            }
+        }
+        const double commit_ms_value = profile_ms(commit_start, ProfileClock::now());
+
+        if (do_profile) {
+            range_profile.proposal_ms += proposal_ms_value;
+            range_profile.proposal_commit_ms += commit_ms_value;
+            range_profile.proposal_inputs += static_cast<int>(overflow_twopins.size());
+            range_profile.proposal_success += proposal_success;
+            range_profile.proposal_commits += proposal_commits;
+            range_profile.proposal_commit_rejects += proposal_rejects;
+            range_profile.proposal_skipped += static_cast<int>(overflow_twopins.size()) - proposal_success;
+        }
+        if (do_log) {
+            log_sp->info("proposal reroute phase candidates={} proposed={} committed={} rejected={} skipped={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
+                    overflow_twopins.size(), proposal_success, proposal_commits,
+                    proposal_rejects, static_cast<int>(overflow_twopins.size()) - proposal_success,
+                    allow_maze ? 1 : 0, proposal_ms_value, commit_ms_value);
+        }
+        return;
+    }
 #ifdef NTHU_ROUTE_OPENMP
     if (parallel_reroute_batches_enabled() && twopin_list.size() > 1) {
         const bool do_profile = profile_enabled();
