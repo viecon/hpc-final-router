@@ -559,6 +559,14 @@ bool v8_strict_legal_repair_overflow_net_inputs_enabled() {
     return std::atoi(value) != 0;
 }
 
+bool v8_strict_legal_repair_dynamic_edge_quota_enabled() {
+    const char* value = std::getenv("NTHU_V8_STRICT_LEGAL_REPAIR_DYNAMIC_EDGE_QUOTA");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
 bool v8_strict_repair_allow_same_net_enabled() {
     const char* value = std::getenv("NTHU_V8_STRICT_REPAIR_ALLOW_SAME_NET");
     if (value == nullptr || *value == '\0') {
@@ -2272,6 +2280,9 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     const bool reuse_inputs = v8_strict_legal_repair_reuse_inputs_enabled();
     const bool overflow_net_inputs =
             v8_strict_legal_repair_overflow_net_inputs_enabled();
+    const bool dynamic_edge_quota =
+            v8_strict_legal_repair_dynamic_edge_quota_enabled();
+    const bool allow_same_net = v8_strict_repair_allow_same_net_enabled();
 
     int total_inputs = 0;
     int total_selected = 0;
@@ -2287,10 +2298,11 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
     double total_commit_ms = 0.0;
 
     if (do_log) {
-        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} snapshot_commit_max={} snapshot_rollback={} rollback_no_progress={} snapshot_global_gate={} snapshot_burst_total={} snapshot_burst_max={} improvement_commit={} reuse_inputs={} overflow_net_inputs={}",
+        log_sp->info("v8 strict legal repair enabled: total_overflow={} max_overflow={} trigger={} max_total={} rounds={} max_candidates={} batch_size={} edge_quota={} dynamic_edge_quota={} allow_same_net={} base_box={} fixed_base_box={} box_inc={} snapshot_commit={} snapshot_commit_max={} snapshot_rollback={} rollback_no_progress={} snapshot_global_gate={} snapshot_burst_total={} snapshot_burst_max={} improvement_commit={} reuse_inputs={} overflow_net_inputs={}",
                 stats.total_overflow, stats.max_overflow, trigger, max_overflow,
-                rounds, max_candidates, batch_size, edge_quota, base_box,
-                fixed_base_box, box_inc, snapshot_commit,
+                rounds, max_candidates, batch_size, edge_quota,
+                dynamic_edge_quota ? 1 : 0, allow_same_net ? 1 : 0,
+                base_box, fixed_base_box, box_inc, snapshot_commit,
                 snapshot_commit_max_overflow, snapshot_rollback, rollback_no_progress,
                 snapshot_global_gate, snapshot_burst_total, snapshot_burst_max,
                 improvement_commit, reuse_inputs, overflow_net_inputs);
@@ -2378,13 +2390,18 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
             if (static_cast<int>(selected.size()) >= batch_size) {
                 break;
             }
-            bool conflict = selected_net_ids.find(input.two_pin->net_id) != selected_net_ids.end();
+            bool conflict = !allow_same_net &&
+                    selected_net_ids.find(input.two_pin->net_id) !=
+                            selected_net_ids.end();
             collect_overflow_route_edges(*input.two_pin, congestion, overflow_edges);
             if (!conflict) {
                 for (const OverflowEdgeRef& edge : overflow_edges) {
                     const auto edge_count = selected_overflow_edges.find(edge.key);
                     const int used_count = edge_count == selected_overflow_edges.end() ? 0 : edge_count->second;
-                    if (used_count >= edge_quota) {
+                    const int edge_limit = dynamic_edge_quota
+                            ? std::max(edge_quota, edge.overuse + 1)
+                            : edge_quota;
+                    if (used_count >= edge_limit) {
                         conflict = true;
                         break;
                     }
@@ -2394,7 +2411,9 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
                 ++conflict_skipped;
                 continue;
             }
-            selected_net_ids.insert(input.two_pin->net_id);
+            if (!allow_same_net) {
+                selected_net_ids.insert(input.two_pin->net_id);
+            }
             for (const OverflowEdgeRef& edge : overflow_edges) {
                 ++selected_overflow_edges[edge.key];
             }

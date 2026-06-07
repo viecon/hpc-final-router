@@ -3148,3 +3148,113 @@ Classification:
   transaction model: smaller conflict-aware waves, deterministic commit against
   the current congestion, and rollback/retry when a wave worsens global
   overflow. Simply disabling parallel proposal is correct but too slow.
+
+v8.52 transactional proposal waves:
+
+Implementation:
+
+- Commit `2464793`.
+- Adds opt-in `NTHU_V8_TRANSACTIONAL_PROPOSAL_WAVES`.
+- Main proposal reroute no longer has to rip up one large selected batch before
+  searching. With the flag enabled, it processes deterministic waves. Each wave
+  removes only that wave's original paths, runs proposal search in parallel, then
+  commits sequentially and rolls back the wave if global overflow/max-overflow
+  worsens or, with `NTHU_V8_TRANSACTIONAL_PROPOSAL_REQUIRE_PROGRESS=1`, fails
+  to improve.
+- This follows the same design direction as collision-aware task batching in
+  NCTU-GR 2.0 and deterministic bulk-synchronous batching in SPRoute 2.0, but it
+  is implemented inside the current NTHU-style rip-up-and-reroute flow instead
+  of replacing the router.
+
+v8.52a launch error:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_2464793_smoke_easyhard_txwaves256_v8_52_openmp14t
+commit=2464793
+```
+
+Classification:
+
+- The runner exited before running any benchmark:
+  `unknown BENCH_SET=smoke_easyhard; use legal7 or requested12`.
+- This is a launch/configuration error, not an algorithm result.
+- The corrected run is v8.52b, using `BENCH_SET=legal7` plus
+  `BENCH_LIST_OVERRIDE=newblue2.fastplace90.3d.50.20.100,adaptec4.aplace60.3d.30.50.90`.
+
+v8.52b transactional waves smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_2464793_smoke_easyhard_txwaves256_v8_52b_openmp14t
+commit=2464793
+NTHU_V8_PROPOSAL_PARALLEL=1
+NTHU_V8_TRANSACTIONAL_PROPOSAL_WAVES=1
+NTHU_V8_TRANSACTIONAL_PROPOSAL_WAVE_SIZE=256
+NTHU_V8_TRANSACTIONAL_PROPOSAL_GLOBAL_GATE=1
+NTHU_V8_TRANSACTIONAL_PROPOSAL_REQUIRE_PROGRESS=1
+NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA=8
+same pathlocal_gate1024 strict-repair settings as v8.50
+```
+
+OpenMP verification:
+
+```text
+ps -L:
+  14 NthuRoute threads were present
+process CPU:
+  about 5.6x to 6.7x CPU during proposal-heavy regions
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.52b | `newblue2` | 137.748507 | 76.516170 | 0.555x | 8812463 | 1.160x | 420 / 18 | rejected; illegal |
+| v8.52b | `adaptec4` | killed after easy failure | 130.666544 | NA | NA | NA | NA | killed |
+
+Evidence:
+
+```text
+newblue2 router log:
+  v8 emergency repair complete: overflow=210
+  2D sum overflow=420
+  2D max overflow=52
+  3D # of overflow=420
+  3D max overflow=18
+Checker summary:
+  total_wirelength=8812463
+  total_overflow=420
+  max_overflow=18
+```
+
+Classification:
+
+- Transactional waves reduced the easy residual overflow from v8.51's
+  1256 / 8 to 420 / 18, so the direction is useful for correctness.
+- Runtime is still slower than original on `newblue2`, so this is not a speed
+  win yet.
+- The remaining failure is now in hard/legal repair: repeated strict-repair
+  logs show `selected=5` and `proposed=0`, because `edge_quota=1` only removes
+  one twopin from heavily overused edges. A strict legal replacement path often
+  cannot exist while the same edge remains over capacity after only one removal.
+- Next fix: make strict repair's conflict quota depend on edge overuse and allow
+  same-net twopins in a repair wave when explicitly enabled. This keeps the
+  remove-before-propose safety property while giving the repair wave enough
+  freed capacity to find legal alternatives.
+
+Literature mapping for the v8.52/v8.53 direction:
+
+- NCTU-GR 2.0, "Multithreaded Collision-Aware Global Routing with
+  Bounded-Length Maze Routing", DAC 2010 / IEEE TCAD 2013,
+  DOI `10.1145/1837274.1837324`. The relevant idea is task-based
+  collision-aware routing rather than fixed region partitioning.
+- Shintani et al., "A Multithreaded Parallel Global Routing Method with
+  Overlapped Routing Regions", DSD 2013, DOI `10.1109/DSD.2013.70`. The
+  relevant idea is route-search in parallel followed by an exclusive/safe update
+  phase.
+- SPRoute, "A Scalable Parallel Negotiation-Based Global Router", ICCAD 2019,
+  DOI `10.1109/ICCAD45719.2019.8942105`. The relevant idea is adapting
+  parallelism when net-level conflicts prevent convergence.
+- SPRoute 2.0, "A Detailed-Routability-Driven Deterministic Parallel Global
+  Router with Soft Capacity", ASP-DAC 2022. The relevant idea is deterministic
+  batch routing; our branch borrows the bulk-synchronous batch concept, not the
+  soft-capacity model.
