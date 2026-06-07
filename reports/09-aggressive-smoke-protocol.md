@@ -4058,3 +4058,65 @@ Classification:
 - Next probe: keep the same code and test a lower routing-state threshold
   such as 768 or 512. The target is to preserve the easy speedup while avoiding
   the expensive hard low-tail handoff at overflow near 1000.
+
+v8.66 adaptive low-tail exit at overflow 768:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_2434479_smoke_easyhard_direct8192_minscore2_lowtail_exit768_v8_66_openmp14t
+commit=2434479
+code base=same router code as d76619c; 2434479 is report-only
+base config=v8.65
+V8_ADAPTIVE_LOW_TAIL_EXIT_LIMIT=768
+V8_DIRECT_ROUTE_ALL_LIMIT=8192
+V8_DIRECT_ROUTE_ALL_MIN_SCORE=2
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.66 | `newblue2` | 77.757816 | 76.516170 | 0.984x | 8818838 | 1.161x | 0 / 0 | legal; near original time |
+| v8.66 | `adaptec4` | 243.537037 | 130.666544 | 0.537x | 13582483 | 1.113x | 0 / 0 | legal; fastest hard smoke so far |
+
+Evidence:
+
+```text
+newblue2:
+  NthuRoute internal time: 9.97226 74.2015
+  v8 adaptive low-tail exit: overflow=704 limit=768 iter=8 max_iter=16
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 4698656 + 4120182 = 8818838
+  direct route_all count=8, total_ms=21108.754, scan_sort_ms=169.966
+  strict phases=9, proposal_ms=8790.449, commit_ms=702.991
+adaptec4:
+  NthuRoute internal time: 15.3308 237.715
+  v8 adaptive low-tail exit: overflow=613 limit=768 iter=38 max_iter=48
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 9006755 + 4575728 = 13582483
+  direct route_all count=38, total_ms=145982.590, scan_sort_ms=903.013
+  strict phases=33, proposal_ms=26284.835, commit_ms=1820.940
+  low-tail global phase after exit: total_overflow=99, max_overflow=4,
+    proposal_ms=2572.949, commit_ms=6801.580
+  low-tail self-ripup then cleared 99 -> 0, elapsed_ms=4280.329
+aggregate:
+  legal=2/2
+  candidate_seconds=321.294853
+  original_seconds=207.182714
+  suite_speedup=0.645x
+  speedup versus v8.65 smoke seconds=1.007x
+  speedup versus v8.64 smoke seconds=1.029x
+```
+
+Classification:
+
+- This is the best current v8 legal smoke configuration by aggregate time.
+- The 768 threshold is a better hard-case handoff than 1024: it keeps more
+  adaptive direct work before post/low-tail and avoids the 32s low-tail tail
+  seen in v8.65.
+- It gives up the easy-row win from v8.65; `newblue2` remains legal but is now
+  slightly slower than original.
+- Next probe: test an intermediate threshold such as 896. That should preserve
+  more of v8.65's easy speed while hopefully avoiding the too-early hard
+  low-tail handoff at overflow 981.
