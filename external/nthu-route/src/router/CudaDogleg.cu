@@ -6,8 +6,10 @@
 #include <climits>
 #include <cstddef>
 #include <cstdlib>
+#include <exception>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace NTHUR {
@@ -25,6 +27,11 @@ int env_int(const char* name, int default_value) {
         return default_value;
     }
     return std::max(0, std::atoi(value));
+}
+
+bool env_flag(const char* name) {
+    const char* value = std::getenv(name);
+    return value != nullptr && *value != '\0';
 }
 
 template <typename T>
@@ -185,6 +192,115 @@ __global__ void choose_doglegs_kernel(int width, int height, int n,
     choices[i].mid = best_mid;
     choices[i].cost = best;
     choices[i].valid = best < 1.0e90 ? 1 : 0;
+}
+
+bool cuda_choose_doglegs_multi_gpu(int width, int height,
+        const std::vector<double>& east_cost,
+        const std::vector<double>& south_cost,
+        const std::vector<CudaDoglegInput>& inputs,
+        int step,
+        int radius,
+        std::vector<CudaDoglegChoice>& choices,
+        const std::vector<int>* east_room,
+        const std::vector<int>* south_room) {
+    int device_count = 0;
+    cuda_check(cudaGetDeviceCount(&device_count), "cudaGetDeviceCount");
+    if (device_count <= 1) {
+        return false;
+    }
+
+    const int max_devices_env = env_int("NTHU_CUDA_DOGLEG_MULTI_GPU_MAX_DEVICES", 0);
+    int devices = max_devices_env > 0 ? std::min(device_count, max_devices_env) : device_count;
+    devices = std::min(devices, static_cast<int>(inputs.size()));
+    if (devices <= 1) {
+        return false;
+    }
+
+    std::vector<std::thread> workers;
+    std::vector<std::exception_ptr> errors(devices);
+    const int chunk = (static_cast<int>(inputs.size()) + devices - 1) / devices;
+
+    for (int device = 0; device < devices; ++device) {
+        const int begin = device * chunk;
+        const int count = std::min(chunk, static_cast<int>(inputs.size()) - begin);
+        if (count <= 0) {
+            continue;
+        }
+        workers.emplace_back([&, device, begin, count]() {
+            try {
+                cuda_check(cudaSetDevice(device), "cudaSetDevice");
+
+                DeviceBuffer<CudaDoglegInput> d_inputs_buffer;
+                DeviceBuffer<double> d_east_cost_buffer;
+                DeviceBuffer<double> d_south_cost_buffer;
+                DeviceBuffer<int> d_east_room_buffer;
+                DeviceBuffer<int> d_south_room_buffer;
+                DeviceBuffer<CudaDoglegChoice> d_choices_buffer;
+
+                d_inputs_buffer.ensure(count, "cudaMalloc inputs");
+                d_east_cost_buffer.ensure(east_cost.size(), "cudaMalloc east_cost");
+                d_south_cost_buffer.ensure(south_cost.size(), "cudaMalloc south_cost");
+                if (east_room != nullptr && south_room != nullptr) {
+                    d_east_room_buffer.ensure(east_cost.size(), "cudaMalloc east_room");
+                    d_south_room_buffer.ensure(south_cost.size(), "cudaMalloc south_room");
+                }
+                d_choices_buffer.ensure(count, "cudaMalloc choices");
+
+                CudaDoglegInput* d_inputs = d_inputs_buffer.get();
+                double* d_east_cost = d_east_cost_buffer.get();
+                double* d_south_cost = d_south_cost_buffer.get();
+                int* d_east_room = east_room != nullptr ? d_east_room_buffer.get() : nullptr;
+                int* d_south_room = south_room != nullptr ? d_south_room_buffer.get() : nullptr;
+                CudaDoglegChoice* d_choices = d_choices_buffer.get();
+
+                cuda_check(cudaMemcpy(d_inputs, inputs.data() + begin,
+                            count * sizeof(CudaDoglegInput), cudaMemcpyHostToDevice),
+                        "copy inputs");
+                cuda_check(cudaMemcpy(d_east_cost, east_cost.data(),
+                            east_cost.size() * sizeof(double), cudaMemcpyHostToDevice),
+                        "copy east_cost");
+                cuda_check(cudaMemcpy(d_south_cost, south_cost.data(),
+                            south_cost.size() * sizeof(double), cudaMemcpyHostToDevice),
+                        "copy south_cost");
+                if (d_east_room != nullptr && d_south_room != nullptr) {
+                    cuda_check(cudaMemcpy(d_east_room, east_room->data(),
+                                east_cost.size() * sizeof(int), cudaMemcpyHostToDevice),
+                            "copy east_room");
+                    cuda_check(cudaMemcpy(d_south_room, south_room->data(),
+                                south_cost.size() * sizeof(int), cudaMemcpyHostToDevice),
+                            "copy south_room");
+                }
+
+                const int block = 256;
+                const int blocks = (count + block - 1) / block;
+                choose_doglegs_kernel<<<blocks, block>>>(width, height, count,
+                        d_inputs, d_east_cost, d_south_cost, d_east_room, d_south_room,
+                        std::max(1, step), std::max(0, std::min(8, radius)), d_choices);
+                cuda_check(cudaGetLastError(), "choose_doglegs_kernel");
+                cuda_check(cudaMemcpy(choices.data() + begin, d_choices,
+                            count * sizeof(CudaDoglegChoice), cudaMemcpyDeviceToHost),
+                        "copy choices");
+            } catch (...) {
+                errors[device] = std::current_exception();
+            }
+        });
+    }
+
+    for (std::thread& worker : workers) {
+        worker.join();
+    }
+    std::exception_ptr first_error;
+    for (const std::exception_ptr& error : errors) {
+        if (error && !first_error) {
+            first_error = error;
+        }
+    }
+
+    cuda_check(cudaSetDevice(0), "cudaSetDevice restore");
+    if (first_error) {
+        std::rethrow_exception(first_error);
+    }
+    return true;
 }
 
 constexpr int kMazeInf = 1000000000;
@@ -468,6 +584,13 @@ bool cuda_choose_doglegs(int width, int height,
         return false;
     }
 
+    if (env_flag("NTHU_CUDA_DOGLEG_MULTI_GPU") &&
+            n >= env_int("NTHU_CUDA_DOGLEG_MULTI_GPU_MIN_INPUTS", 4096) &&
+            cuda_choose_doglegs_multi_gpu(width, height, east_cost, south_cost, inputs,
+                step, radius, choices, east_room, south_room)) {
+        return true;
+    }
+
     static DeviceBuffer<CudaDoglegInput> d_inputs_buffer;
     static DeviceBuffer<double> d_east_cost_buffer;
     static DeviceBuffer<double> d_south_cost_buffer;
@@ -510,7 +633,6 @@ bool cuda_choose_doglegs(int width, int height,
             d_south_cost, d_east_room, d_south_room, std::max(1, step),
             std::max(0, std::min(8, radius)), d_choices);
     cuda_check(cudaGetLastError(), "choose_doglegs_kernel");
-    cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize");
     cuda_check(cudaMemcpy(choices.data(), d_choices, choices.size() * sizeof(CudaDoglegChoice),
                 cudaMemcpyDeviceToHost), "copy choices");
 
@@ -568,7 +690,6 @@ bool cuda_find_legal_maze_path(int box_width, int box_height,
         legal_maze_single_block_kernel<<<1, block, area * sizeof(int)>>>(box_width, box_height,
                 d_east_open, d_south_open, source_index, target_index, d_dist);
         cuda_check(cudaGetLastError(), "legal_maze_single_block_kernel");
-        cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize single-block maze");
     } else {
         cuda_check(cudaMemcpy(d_dist, dist.data(), area * sizeof(int),
                     cudaMemcpyHostToDevice), "copy maze dist");
@@ -583,7 +704,6 @@ bool cuda_find_legal_maze_path(int box_width, int box_height,
             legal_maze_relax_kernel<<<blocks, block>>>(box_width, box_height,
                     d_east_open, d_south_open, d_dist, d_changed);
             cuda_check(cudaGetLastError(), "legal_maze_relax_kernel");
-            cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize maze");
             cuda_check(cudaMemcpy(&changed, d_changed, sizeof(int), cudaMemcpyDeviceToHost),
                     "copy maze changed");
         }
@@ -710,7 +830,6 @@ bool cuda_find_costed_maze_path(int box_width, int box_height,
                 d_east_cost_buffer.get(), d_south_cost_buffer.get(),
                 source_index, d_result_dist, d_result_parent);
         cuda_check(cudaGetLastError(), "costed_maze_single_block_kernel");
-        cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize single-block costed maze");
     } else {
         float* d_prev_dist = d_dist_a_buffer.get();
         float* d_next_dist = d_dist_b_buffer.get();
@@ -729,7 +848,6 @@ bool cuda_find_costed_maze_path(int box_width, int box_height,
                     d_prev_dist, d_prev_parent, d_next_dist, d_next_parent,
                     d_changed_buffer.get());
             cuda_check(cudaGetLastError(), "costed_maze_relax_kernel");
-            cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize costed maze");
             cuda_check(cudaMemcpy(&changed, d_changed_buffer.get(), sizeof(int), cudaMemcpyDeviceToHost),
                     "copy costed maze changed");
             std::swap(d_prev_dist, d_next_dist);

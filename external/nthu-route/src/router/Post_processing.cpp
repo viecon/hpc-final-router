@@ -363,6 +363,7 @@ Post_processing::Post_processing(const RoutingParameters& routingparam, Congesti
         routing_parameter { routingparam },	//
         congestion { congestion },	//
         total_no_overflow { false },	//
+        process_call_count { 0 }, //
         construct_2d_tree { construct_2d_tree }, //
         rangeRouter { rangeRouter } {
 
@@ -372,21 +373,43 @@ Post_processing::Post_processing(const RoutingParameters& routingparam, Congesti
 void Post_processing::process(Route_2pinnets& route_2pinnets) {
     const bool do_profile = profile_enabled();
     const auto post_start = ProfileClock::now();
+    ++process_call_count;
 
     log_sp->info("================================================================");
     log_sp->info("===                   Enter Post Processing                  ===");
     log_sp->info("================================================================");
 
     int Post_processing_iteration = routing_parameter.get_iteration_p3();
-
-    construct_2d_tree.BOXSIZE_INC = routing_parameter.get_init_box_size_p3();
+    int init_box_size = routing_parameter.get_init_box_size_p3();
     int inc_num = routing_parameter.get_box_size_inc_p3();
+    if (std::getenv("NTHU_ADAPTIVE_LEGAL_REPAIR") != nullptr) {
+        if (process_call_count == 1) {
+            Post_processing_iteration = env_int("NTHU_ADAPTIVE_INITIAL_P3_MAX_ITER",
+                    Post_processing_iteration);
+            init_box_size = env_int("NTHU_ADAPTIVE_INITIAL_P3_INIT_BOX", init_box_size);
+            inc_num = env_int("NTHU_ADAPTIVE_INITIAL_P3_BOX_INC", inc_num);
+        } else {
+            Post_processing_iteration = env_int("NTHU_ADAPTIVE_REPAIR_P3_MAX_ITER",
+                    Post_processing_iteration);
+            init_box_size = env_int("NTHU_ADAPTIVE_REPAIR_P3_INIT_BOX", init_box_size);
+            inc_num = env_int("NTHU_ADAPTIVE_REPAIR_P3_BOX_INC", inc_num);
+        }
+        log_sp->info("adaptive post parameters: call={} iterations={} init_box={} box_inc={}",
+                process_call_count, Post_processing_iteration, init_box_size, inc_num);
+    }
+
+    construct_2d_tree.BOXSIZE_INC = init_box_size;
     SPDLOG_TRACE(log_sp, "size: ({} {}) ", construct_2d_tree.BOXSIZE_INC, inc_num);
 
     construct_2d_tree.done_iter++;
     congestion.used_cost_flag = MADEOF_COST;
     int cur_overflow = congestion.cal_max_overflow();
     if (cur_overflow > 0) {
+        const int post_stall_limit = std::max(0, env_int("NTHU_POST_STALL_LIMIT", 0));
+        const int post_stall_min_overflow = std::max(0, env_int("NTHU_POST_STALL_MIN_OVERFLOW", 0));
+        const int post_stall_min_delta = std::max(1, env_int("NTHU_POST_STALL_MIN_DELTA", 1));
+        int best_overflow = cur_overflow;
+        int stall_count = 0;
         //In post processing, we only need to pre-evaluate all cost once.
         //The other update will be done by update_add(remove)_edge
         congestion.pre_evaluate_congestion_cost();
@@ -415,6 +438,20 @@ void Post_processing::process(Route_2pinnets& route_2pinnets) {
                 }
                 break;
 }
+            if (post_stall_limit > 0 && cur_overflow > post_stall_min_overflow) {
+                if (cur_overflow + post_stall_min_delta < best_overflow) {
+                    best_overflow = cur_overflow;
+                    stall_count = 0;
+                } else {
+                    ++stall_count;
+                    if (stall_count >= post_stall_limit) {
+                        log_sp->info("post-processing stall stop: iter={} overflow={} best={} limit={} min_delta={} min_overflow={}",
+                                i + 1, cur_overflow, best_overflow, post_stall_limit,
+                                post_stall_min_delta, post_stall_min_overflow);
+                        break;
+                    }
+                }
+            }
             construct_2d_tree.BOXSIZE_INC += inc_num;
             phase_start = ProfileClock::now();
             route_2pinnets.reallocate_two_pin_list();

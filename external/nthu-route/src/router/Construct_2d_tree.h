@@ -78,6 +78,7 @@ struct Construct_2d_tree {
     int done_iter;
 
     int BOXSIZE_INC;
+    bool force_route_remainder;
     std::vector<TreeFlute> net_flutetree;
 
     std::vector<bool> NetDirtyBit;

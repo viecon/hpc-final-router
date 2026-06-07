@@ -12,8 +12,8 @@ hit and some outputs were cleared. The important aggregate evidence for the repo
 still present:
 
 ```text
-docs/final_experiment_report.md
-docs/methods_and_results_summary.md
+docs/10-early-source-strategy-report.md
+docs/11-early-results-summary.md
 results/bench16_strategy_catalog.csv
 results/bench16_strategy_matrix_r2_summary.csv
 results/bench16_strategy_matrix_r2_speedups.csv
