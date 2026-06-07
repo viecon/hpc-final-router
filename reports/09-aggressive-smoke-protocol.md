@@ -3036,3 +3036,115 @@ Classification:
   off in `frontier_v8_direct_proposal`. This keeps the OpenMP build for safer
   scan/reduction code, but makes the proposal-only parallel path opt-in until it
   can be proven legal.
+
+v8.49 safe-proposal cap-48 smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_ea40671_smoke_easyhard_safeproposal_cap48_v8_49_openmp14t
+commit=ea40671
+build_dir=/home/ubuntu/hpc-final-router/external/nthu-route/build-release-vm-openmp-ON
+NTHU_V8_PROPOSAL_PARALLEL=0
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.49 | `newblue2` | timeout at 230 | 76.516170 | <0.333x | NA | NA | NA | rejected; timeout |
+| v8.49 | `adaptec4` | killed after easy timeout | 130.666544 | NA | NA | NA | NA | killed |
+
+Classification:
+
+- This was intentionally killed after the easy row crossed the 3x gate.
+- It is not a valid v8.39/v8.43 control because it did not carry the
+  `pathlocal_gate1024` strict-repair settings. Keep it only as a configuration
+  mistake record.
+- The hard smoke was killed by process group and its partial state is not used.
+
+v8.50 safe-proposal path-local strict-repair smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_ea40671_smoke_easyhard_pathlocal_gate1024_safeproposal_v8_50_openmp14t
+commit=ea40671
+build_dir=/home/ubuntu/hpc-final-router/external/nthu-route/build-release-vm-openmp-ON
+NTHU_V8_PROPOSAL_PARALLEL=0
+NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA=16
+NTHU_V8_STRICT_LEGAL_REPAIR=1
+NTHU_V8_STRICT_LEGAL_REPAIR_SNAPSHOT_COMMIT=1
+NTHU_V8_STRICT_LEGAL_REPAIR_SNAPSHOT_COMMIT_MAX_OVERFLOW=1024
+NTHU_V8_STRICT_LEGAL_REPAIR_SNAPSHOT_GLOBAL_GATE=1
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.50 | `newblue2` | timeout at 230 | 76.516170 | <0.333x | NA | NA | NA | rejected; timeout |
+| v8.50 | `adaptec4` | killed after easy timeout | 130.666544 | NA | NA | NA | NA | killed |
+
+Classification:
+
+- This is the comparable safe-control run for the path-local strict-repair
+  settings.
+- Disabling proposal parallelism avoids the known OpenMP proposal legality
+  failure, but it also removes the only measured multi-core work in this branch.
+- The resulting serial proposal path is too slow and fails the smoke gate before
+  producing a legal easy result. This is not a viable optimization direction by
+  itself.
+
+v8.51 parallel-proposal path-local strict-repair smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_ea40671_smoke_easyhard_pathlocal_gate1024_parallelproposal_v8_51_openmp14t
+commit=ea40671
+build_dir=/home/ubuntu/hpc-final-router/external/nthu-route/build-release-vm-openmp-ON
+NTHU_V8_PROPOSAL_PARALLEL=1
+same pathlocal_gate1024 strict-repair settings as v8.50
+```
+
+OpenMP verification:
+
+```text
+NthuRoute log:
+  = OpenMP acceleration enabled, max threads: 14         =
+ps -L:
+  14 NthuRoute threads were present
+process CPU:
+  about 4.4x CPU during proposal-heavy regions
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.51 | `newblue2` | 142.119645 | 76.516170 | 0.538x | 8776705 | 1.155x | 1256 / 8 | rejected; illegal |
+| v8.51 | `adaptec4` | killed after easy failure | 130.666544 | NA | NA | NA | NA | killed |
+
+Evidence:
+
+```text
+newblue2 router log:
+  v8 emergency repair complete: overflow=628
+  2D sum overflow=1256
+  2D max overflow=14
+  3D # of overflow=1256
+  3D max overflow=8
+Checker summary:
+  total_wirelength=8776705
+  total_overflow=1256
+  max_overflow=8
+```
+
+Classification:
+
+- Proposal parallelism is the only current v8 path that measurably uses multiple
+  cores, but the produced route is illegal on an original-legal benchmark.
+- The path-local strict-repair safety net does not recover this residual
+  overflow. The low-tail repair repeatedly reaches the emergency phase with a
+  few hundred remaining 2D overflow, then stops at nonzero 3D overflow.
+- The hard smoke was killed by process group immediately after the easy legality
+  failure.
+- The next implementation should keep parallel search, but change the
+  transaction model: smaller conflict-aware waves, deterministic commit against
+  the current congestion, and rollback/retry when a wave worsens global
+  overflow. Simply disabling parallel proposal is correct but too slow.

@@ -255,6 +255,38 @@ bool v8_proposal_parallel_enabled() {
     return std::atoi(value) != 0;
 }
 
+bool v8_transactional_proposal_waves_enabled() {
+    const char* value = std::getenv("NTHU_V8_TRANSACTIONAL_PROPOSAL_WAVES");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
+int v8_transactional_proposal_wave_size() {
+    const char* value = std::getenv("NTHU_V8_TRANSACTIONAL_PROPOSAL_WAVE_SIZE");
+    if (value == nullptr || *value == '\0') {
+        return 256;
+    }
+    return std::max(1, std::atoi(value));
+}
+
+bool v8_transactional_proposal_global_gate_enabled() {
+    const char* value = std::getenv("NTHU_V8_TRANSACTIONAL_PROPOSAL_GLOBAL_GATE");
+    if (value == nullptr || *value == '\0') {
+        return true;
+    }
+    return std::atoi(value) != 0;
+}
+
+bool v8_transactional_proposal_require_progress_enabled() {
+    const char* value = std::getenv("NTHU_V8_TRANSACTIONAL_PROPOSAL_REQUIRE_PROGRESS");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
+}
+
 bool v8_reject_cooldown_enabled() {
     return std::getenv("NTHU_V8_REJECT_COOLDOWN") != nullptr;
 }
@@ -2731,6 +2763,12 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         const int global_commit_limit = proposal_reroute_global_commit_limit();
         const int global_commit_max_tests = proposal_reroute_global_commit_max_tests();
         const bool global_commit_post_only = proposal_reroute_global_commit_post_only_enabled();
+        const bool transactional_waves = v8_transactional_proposal_waves_enabled();
+        const int transactional_wave_size = v8_transactional_proposal_wave_size();
+        const bool transactional_wave_global_gate =
+                v8_transactional_proposal_global_gate_enabled();
+        const bool transactional_wave_require_progress =
+                v8_transactional_proposal_require_progress_enabled();
 
         int total_inputs = 0;
         int total_selected = 0;
@@ -2740,6 +2778,8 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         int total_proposal_global_commits = 0;
         int total_proposal_global_tests = 0;
         int total_proposal_rejects = 0;
+        int total_transactional_waves = 0;
+        int total_transactional_wave_rollbacks = 0;
         double total_proposal_ms = 0.0;
         double total_commit_ms = 0.0;
         const bool reject_cooldown = v8_reject_cooldown_enabled();
@@ -2863,6 +2903,272 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             }
             if (overflow_twopins.empty()) {
                 break;
+            }
+
+            if (transactional_waves && ripup_before_propose) {
+                int proposal_success = 0;
+                int proposal_commits = 0;
+                int proposal_global_commits = 0;
+                int proposal_global_tests = 0;
+                int proposal_rejects = 0;
+                int transactional_wave_rollbacks = 0;
+                int transactional_wave_count = 0;
+                double proposal_ms_value = 0.0;
+                double commit_ms_value = 0.0;
+                const int wave_size =
+                        std::max(1, std::min(transactional_wave_size,
+                                static_cast<int>(overflow_twopins.size())));
+
+                for (int wave_begin = 0;
+                        wave_begin < static_cast<int>(overflow_twopins.size());
+                        wave_begin += wave_size) {
+                    const int wave_end = std::min(wave_begin + wave_size,
+                            static_cast<int>(overflow_twopins.size()));
+                    const int current_wave_size = wave_end - wave_begin;
+                    ++transactional_wave_count;
+
+                    const OverflowStats wave_start_stats =
+                            transactional_wave_global_gate
+                            ? current_overflow_stats(congestion)
+                            : OverflowStats {};
+
+                    std::vector<RippedPathState> wave_states(current_wave_size);
+                    for (int i = 0; i < current_wave_size; ++i) {
+                        Two_pin_element_2d& two_pin =
+                                *overflow_twopins[wave_begin + i];
+                        RippedPathState& state = wave_states[i];
+                        state.original_path = two_pin.path;
+                        state.original_pin1 = two_pin.pin1;
+                        state.original_pin2 = two_pin.pin2;
+                        state.old_overflow_score =
+                                path_overflow_score(two_pin, congestion);
+                    }
+                    for (int i = 0; i < current_wave_size; ++i) {
+                        Two_pin_element_2d& two_pin =
+                                *overflow_twopins[wave_begin + i];
+                        RippedPathState& state = wave_states[i];
+                        congestion.update_congestion_map_remove_two_pin_net(
+                                state.original_path, two_pin.net_id);
+                        state.removed = true;
+                    }
+
+                    std::vector<RerouteProposal> proposals(current_wave_size);
+                    const auto proposal_start = ProfileClock::now();
+#ifdef NTHU_ROUTE_OPENMP
+                    if (v8_proposal_parallel_enabled()) {
+#pragma omp parallel
+                        {
+                            MonotonicRouting local_monotonic(congestion,
+                                    monotonic_enable_flag);
+                            Multisource_multisink_mazeroute local_maze(
+                                    construct_2d_tree, congestion);
+                            local_maze.set_rebuild_tree_from_twopins(true);
+#pragma omp for schedule(dynamic, 1)
+                            for (int i = 0; i < current_wave_size; ++i) {
+                                Two_pin_element_2d* two_pin =
+                                        overflow_twopins[wave_begin + i];
+                                proposals[i].two_pin = two_pin;
+                                proposals[i].proposed = propose_reroute_path(
+                                        *two_pin, version, local_monotonic,
+                                        allow_maze ? &local_maze : nullptr,
+                                        allow_maze, proposals[i].path, true,
+                                        wave_states[i].old_overflow_score);
+                            }
+                        }
+                    } else
+#endif
+                    {
+                        MonotonicRouting local_monotonic(congestion,
+                                monotonic_enable_flag);
+                        Multisource_multisink_mazeroute local_maze(
+                                construct_2d_tree, congestion);
+                        local_maze.set_rebuild_tree_from_twopins(true);
+                        for (int i = 0; i < current_wave_size; ++i) {
+                            Two_pin_element_2d* two_pin =
+                                    overflow_twopins[wave_begin + i];
+                            proposals[i].two_pin = two_pin;
+                            proposals[i].proposed = propose_reroute_path(
+                                    *two_pin, version, local_monotonic,
+                                    allow_maze ? &local_maze : nullptr,
+                                    allow_maze, proposals[i].path, true,
+                                    wave_states[i].old_overflow_score);
+                        }
+                    }
+                    proposal_ms_value += profile_ms(proposal_start,
+                            ProfileClock::now());
+
+                    auto restore_wave_originals = [&]() {
+                        for (int i = 0; i < current_wave_size; ++i) {
+                            Two_pin_element_2d& two_pin =
+                                    *overflow_twopins[wave_begin + i];
+                            if (!two_pin.path.empty()) {
+                                congestion.update_congestion_map_remove_two_pin_net(
+                                        two_pin.path, two_pin.net_id);
+                            }
+                        }
+                        for (int i = 0; i < current_wave_size; ++i) {
+                            Two_pin_element_2d& two_pin =
+                                    *overflow_twopins[wave_begin + i];
+                            const RippedPathState& state = wave_states[i];
+                            two_pin.path = state.original_path;
+                            two_pin.pin1 = state.original_pin1;
+                            two_pin.pin2 = state.original_pin2;
+                            congestion.update_congestion_map_insert_two_pin_net(
+                                    two_pin);
+                            wave_states[i].removed = false;
+                        }
+                    };
+
+                    const auto commit_start = ProfileClock::now();
+                    int wave_proposed = 0;
+                    int wave_commits = 0;
+                    int wave_rejects = 0;
+                    for (int proposal_index = 0;
+                            proposal_index < static_cast<int>(proposals.size());
+                            ++proposal_index) {
+                        RerouteProposal& proposal = proposals[proposal_index];
+                        RippedPathState& state = wave_states[proposal_index];
+                        Two_pin_element_2d& two_pin = *proposal.two_pin;
+                        if (!proposal.proposed) {
+                            if (reject_cooldown) {
+                                rejected_this_phase.insert(proposal.two_pin);
+                            }
+                            if (state.removed) {
+                                two_pin.path = state.original_path;
+                                two_pin.pin1 = state.original_pin1;
+                                two_pin.pin2 = state.original_pin2;
+                                congestion.update_congestion_map_insert_two_pin_net(
+                                        two_pin);
+                                state.removed = false;
+                            }
+                            ++proposal_rejects;
+                            ++wave_rejects;
+                            continue;
+                        }
+
+                        ++proposal_success;
+                        ++wave_proposed;
+                        bool accepted_by_global_gate = false;
+                        bool evaluated_global_gate = false;
+                        const bool allow_global_gate = global_commit_limit > 0 &&
+                                (!global_commit_post_only || version == 3) &&
+                                (global_commit_max_tests <= 0 ||
+                                        proposal_global_tests <
+                                                global_commit_max_tests);
+                        if (commit_reroute_proposal(two_pin, proposal.path,
+                                    version, state.removed,
+                                    state.removed ? state.old_overflow_score : -1,
+                                    allow_global_gate
+                                            ? phase_start_overflow.total_overflow
+                                            : -1,
+                                    &accepted_by_global_gate,
+                                    &evaluated_global_gate)) {
+                            proposal.committed = true;
+                            ++proposal_commits;
+                            ++wave_commits;
+                            if (accepted_by_global_gate) {
+                                ++proposal_global_commits;
+                            }
+                        } else {
+                            proposal.rejected = true;
+                            ++proposal_rejects;
+                            ++wave_rejects;
+                            if (reject_cooldown) {
+                                rejected_this_phase.insert(proposal.two_pin);
+                            }
+                        }
+                        state.removed = false;
+                        if (evaluated_global_gate) {
+                            ++proposal_global_tests;
+                        }
+                    }
+
+                    if (transactional_wave_global_gate && wave_commits > 0) {
+                        const OverflowStats wave_end_stats =
+                                current_overflow_stats(congestion);
+                        const bool wave_worsened =
+                                wave_end_stats.total_overflow >
+                                        wave_start_stats.total_overflow ||
+                                (wave_end_stats.total_overflow ==
+                                        wave_start_stats.total_overflow &&
+                                wave_end_stats.max_overflow >
+                                        wave_start_stats.max_overflow);
+                        const bool wave_progress =
+                                wave_end_stats.total_overflow <
+                                        wave_start_stats.total_overflow ||
+                                (wave_end_stats.total_overflow ==
+                                        wave_start_stats.total_overflow &&
+                                wave_end_stats.max_overflow <
+                                        wave_start_stats.max_overflow);
+                        if (wave_worsened ||
+                                (transactional_wave_require_progress &&
+                                        !wave_progress &&
+                                        wave_start_stats.total_overflow > 0)) {
+                            restore_wave_originals();
+                            proposal_commits -= wave_commits;
+                            proposal_rejects += wave_commits;
+                            wave_rejects += wave_commits;
+                            ++transactional_wave_rollbacks;
+                            if (reject_cooldown) {
+                                for (int i = 0; i < current_wave_size; ++i) {
+                                    rejected_this_phase.insert(
+                                            overflow_twopins[wave_begin + i]);
+                                }
+                            }
+                        }
+                    }
+                    commit_ms_value += profile_ms(commit_start,
+                            ProfileClock::now());
+                }
+
+                total_inputs += static_cast<int>(proposal_inputs.size());
+                total_selected += static_cast<int>(overflow_twopins.size());
+                total_conflict_skipped += conflict_skipped;
+                total_proposal_success += proposal_success;
+                total_proposal_commits += proposal_commits;
+                total_proposal_global_commits += proposal_global_commits;
+                total_proposal_global_tests += proposal_global_tests;
+                total_proposal_rejects += proposal_rejects;
+                total_transactional_waves += transactional_wave_count;
+                total_transactional_wave_rollbacks += transactional_wave_rollbacks;
+                total_proposal_ms += proposal_ms_value;
+                total_commit_ms += commit_ms_value;
+
+                if (do_log) {
+                    log_sp->info("proposal reroute round={} hot_pool={} selected={} conflict_skipped={} proposed={} committed={} global_committed={} global_tests={} rejected={} skipped={} conflict_aware={} edge_conflict={} edge_quota={} edge_oversubscribe={} improvement_commit={} global_commit_limit={} global_test_limit={} ripup_snapshot={} safe_commit={} adaptive_rounds={} low_overflow={} allow_maze={} transactional_waves={} wave_size={} wave_rollbacks={} wave_global_gate={} wave_require_progress={} proposal_ms={:.3f} commit_ms={:.3f}",
+                            proposal_round, proposal_inputs.size(),
+                            overflow_twopins.size(), conflict_skipped,
+                            proposal_success, proposal_commits,
+                            proposal_global_commits, proposal_global_tests,
+                            proposal_rejects,
+                            static_cast<int>(overflow_twopins.size()) -
+                                    proposal_success,
+                            conflict_aware ? 1 : 0,
+                            overflow_edge_conflict ? 1 : 0,
+                            overflow_edge_conflict ? overflow_edge_quota : 0,
+                            emergency_edge_oversubscribe ? 1 : 0,
+                            improvement_commit ? 1 : 0, global_commit_limit,
+                            global_commit_max_tests,
+                            ripup_before_propose ? 1 : 0,
+                            safe_commit ? 1 : 0,
+                            adaptive_rounds ? 1 : 0,
+                            phase_start_overflow.total_overflow,
+                            allow_maze ? 1 : 0, transactional_wave_count,
+                            wave_size, transactional_wave_rollbacks,
+                            transactional_wave_global_gate ? 1 : 0,
+                            transactional_wave_require_progress ? 1 : 0,
+                            proposal_ms_value, commit_ms_value);
+                }
+                if (proposal_commits == 0) {
+                    if (reject_cooldown &&
+                            proposal_rejects +
+                                    (static_cast<int>(overflow_twopins.size()) -
+                                            proposal_success) > 0) {
+                        continue;
+                    }
+                    break;
+                }
+                continue;
             }
 
             std::vector<RippedPathState> ripped_paths(overflow_twopins.size());
@@ -3025,7 +3331,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             range_profile.proposal_skipped += total_selected - total_proposal_success;
         }
         if (do_log) {
-            log_sp->info("proposal reroute phase rounds={} base_rounds={} hot_pool_scanned={} selected={} conflict_skipped={} proposed={} committed={} global_committed={} global_tests={} rejected={} skipped={} conflict_aware={} edge_conflict={} edge_quota={} edge_oversubscribe={} improvement_commit={} global_commit_limit={} global_test_limit={} ripup_snapshot={} safe_commit={} adaptive_rounds={} low_overflow={} allow_maze={} proposal_ms={:.3f} commit_ms={:.3f}",
+            log_sp->info("proposal reroute phase rounds={} base_rounds={} hot_pool_scanned={} selected={} conflict_skipped={} proposed={} committed={} global_committed={} global_tests={} rejected={} skipped={} conflict_aware={} edge_conflict={} edge_quota={} edge_oversubscribe={} improvement_commit={} global_commit_limit={} global_test_limit={} ripup_snapshot={} safe_commit={} adaptive_rounds={} low_overflow={} allow_maze={} transactional_waves={} wave_rollbacks={} proposal_ms={:.3f} commit_ms={:.3f}",
                     effective_max_rounds, max_rounds, total_inputs, total_selected, total_conflict_skipped,
                     total_proposal_success, total_proposal_commits, total_proposal_global_commits,
                     total_proposal_global_tests, total_proposal_rejects,
@@ -3036,7 +3342,9 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                     ripup_before_propose ? 1 : 0,
                     safe_commit ? 1 : 0,
                     adaptive_rounds ? 1 : 0, phase_start_overflow.total_overflow,
-                    allow_maze ? 1 : 0, total_proposal_ms, total_commit_ms);
+                    allow_maze ? 1 : 0, total_transactional_waves,
+                    total_transactional_wave_rollbacks, total_proposal_ms,
+                    total_commit_ms);
         }
         if (v8_low_tail_global_repair_enabled() &&
                 (!v8_low_tail_post_only_enabled() || version == 3)) {
