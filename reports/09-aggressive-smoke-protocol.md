@@ -2800,3 +2800,154 @@ Classification:
   `NTHU_V8_STRICT_LEGAL_REPAIR_ROLLBACK_NO_PROGRESS=1`.
 - Default behavior returns to the v8.39 rule: no-progress is counted by
   `committed == 0`, not by immediate global-overflow improvement.
+
+v8.43 control smoke after opt-in rollback:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_24c6a7a_smoke_easyhard_pathlocal_gate1024_v8_43_openmp14t
+commit=24c6a7a
+same low-threshold config as v8.39
+rollback_no_progress not enabled
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.43 | `newblue2` | 92.529893 | 76.516170 | 0.827x | 8780064 | 1.156x | 0 / 0 | legal control |
+| v8.43 | `adaptec4` | 270.860734 | 130.666544 | 0.482x | 13582650 | 1.113x | 0 / 0 | legal control |
+
+Comparison to v8.39:
+
+```text
+v8.39 newblue2: 88.172075s, WL 8780064, overflow 0 / 0
+v8.43 newblue2: 92.529893s, WL 8780064, overflow 0 / 0
+v8.39 adaptec4: 270.712247s, WL 13582650, overflow 0 / 0
+v8.43 adaptec4: 270.860734s, WL 13582650, overflow 0 / 0
+```
+
+Classification:
+
+- v8.43 restores the v8.39 legal behavior and keeps the no-progress rollback as
+  an opt-in rejected-experiment knob.
+- It does not improve speed.  The remaining hard-row cost is the long emergency
+  P2 repair tail.
+- In the hard log, `adaptec4` reaches emergency P2 iteration 48 before
+  post-processing clears the remaining overflow.  Next probe: reduce
+  `V8_EMERGENCY_P2_MAX_ITER` from 48 to 32 and test whether the post stage can
+  legally clean the residual overflow faster.
+
+v8.44 emergency-tail cap probe:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_24c6a7a_smoke_easyhard_emerg32_v8_44_openmp14t
+commit=24c6a7a
+same config as v8.43 except V8_EMERGENCY_P2_MAX_ITER=32
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.44 | `newblue2` | 89.147600 | 76.516170 | 0.858x | 8780064 | 1.156x | 0 / 0 | legal |
+| v8.44 | `adaptec4` | 242.356665 | 130.666544 | 0.539x | 13572861 | 1.112x | 400 / 4 | rejected; illegal |
+
+Evidence:
+
+```text
+adaptec4 router log:
+  V8 emergency repair complete: overflow=200
+  2D sum overflow=400
+  2D max overflow=8
+  3D # of overflow=400
+  3D max overflow=4
+Checker summary:
+  total_overflow=400
+  max_overflow=4
+  overflowed_nets=1157
+  overflowed_edges=198
+```
+
+Classification:
+
+- The tail cap improves runtime on the hard smoke row by about 28.5s versus
+  v8.43, but it exits before the state is legal.
+- This is a useful runtime frontier row, not a valid final config.
+- Next probe: try an intermediate cap, `V8_EMERGENCY_P2_MAX_ITER=40`, to see
+  whether legality can be recovered with less tail work than 48.
+
+v8.45 emergency-tail cap probe:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_24c6a7a_smoke_easyhard_emerg40_v8_45_openmp14t
+commit=24c6a7a
+same config as v8.43 except V8_EMERGENCY_P2_MAX_ITER=40
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.45 | `newblue2` | 87.029222 | 76.516170 | 0.879x | 8780064 | 1.156x | 0 / 0 | legal |
+| v8.45 | `adaptec4` | 267.056369 | 130.666544 | 0.489x | 13579038 | 1.112x | 166 / 4 | rejected; illegal |
+
+Evidence:
+
+```text
+adaptec4 router log:
+  V8 emergency repair complete: overflow=83
+  2D sum overflow=166
+  2D max overflow=8
+  3D # of overflow=166
+  3D max overflow=4
+Checker summary:
+  total_overflow=166
+  max_overflow=4
+  overflowed_nets=475
+  overflowed_edges=81
+```
+
+Classification:
+
+- Cap 40 leaves less overflow than cap 32, but it is still illegal on the hard
+  smoke row where original is legal.
+- Runtime is also not meaningfully better than v8.43 on `adaptec4`, because the
+  remaining post/legalization work still dominates.
+- The next intended probe was cap 44, but the run exposed a runner/build issue
+  before producing valid data.
+
+v8.46 cap-44 probe killed as invalid:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_24c6a7a_smoke_easyhard_emerg44_v8_46_openmp14t
+commit=24c6a7a
+same config as v8.43 except V8_EMERGENCY_P2_MAX_ITER=44
+PID=2802684
+child timeout PGID=2802715
+```
+
+Observed issue:
+
+```text
+NthuRoute log header:
+  = OpenMP acceleration disabled                        =
+ps -L:
+  only one NthuRoute thread was present
+runner env:
+  ROUTER_OPENMP=ON
+  OMP_NUM_THREADS=14
+  BUILD_DIR=/home/ubuntu/hpc-final-router/external/nthu-route/build-release-vm-strict-cpu
+```
+
+Classification:
+
+- This is a benchmark runner integration error, not a routing-algorithm result.
+- `run_vm_aggressive_guard.sh` forced `BUILD_DIR` to
+  `build-release-vm-strict-cpu`; therefore `ROUTER_OPENMP=ON` did not guarantee
+  that the selected binary was compiled with OpenMP.
+- The process groups were killed intentionally:
+  - runner PGID `2802684`
+  - child timeout/NthuRoute PGID `2802715`
+- The script is patched so the default build directory now follows
+  `ROUTER_OPENMP` / `ROUTER_CUDA`, and `environment.txt` records `build_dir`.
+- v8.46 has no valid speed or legality metric and must not be used in summaries.

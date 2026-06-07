@@ -9,7 +9,6 @@ RUN_ID=${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)_$(git rev-parse --short HEAD)}
 RESULT_DIR=${RESULT_DIR:-"$ROOT/results/$TAG/$RUN_ID"}
 BENCH_DIR=${BENCH_DIR:-"$ROOT/benchmarks/ispd08"}
 NTHU_DIR=${NTHU_DIR:-"$ROOT/external/nthu-route"}
-BUILD_DIR=${BUILD_DIR:-"$NTHU_DIR/build-release-vm-strict-cpu"}
 BENCH_SET=${BENCH_SET:-legal7}
 STRATEGY=${STRATEGY:-frontier_edgecount_netguided_v2}
 PARALLEL_BENCH_JOBS=${PARALLEL_BENCH_JOBS:-7}
@@ -18,6 +17,16 @@ JOBS=${JOBS:-14}
 ROUTER_THREADS=${ROUTER_THREADS:-1}
 ROUTER_OPENMP=${ROUTER_OPENMP:-OFF}
 ROUTER_CUDA=${ROUTER_CUDA:-OFF}
+
+if [[ -z "${BUILD_DIR:-}" ]]; then
+  if [[ "$ROUTER_CUDA" == "ON" ]]; then
+    BUILD_DIR="$NTHU_DIR/build-release-vm-openmp-${ROUTER_OPENMP}-cuda-ON"
+  elif [[ "$ROUTER_OPENMP" == "ON" ]]; then
+    BUILD_DIR="$NTHU_DIR/build-release-vm-openmp-ON"
+  else
+    BUILD_DIR="$NTHU_DIR/build-release-vm-openmp-OFF"
+  fi
+fi
 
 mkdir -p "$RESULT_DIR"
 
@@ -466,6 +475,7 @@ esac
   echo "router_threads=$ROUTER_THREADS"
   echo "router_openmp=$ROUTER_OPENMP"
   echo "router_cuda=$ROUTER_CUDA"
+  echo "build_dir=$BUILD_DIR"
   echo "strategy_args=$strategy_args"
   echo "strategy_env=${strategy_env[*]}"
   echo
