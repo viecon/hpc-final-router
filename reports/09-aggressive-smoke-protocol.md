@@ -2499,3 +2499,225 @@ v8.38 planned code probe:
   `round_start_max + snapshot_burst_max`;
 - disable that envelope on the last strict-repair round so the final state is
   not deliberately worsened without another repair opportunity.
+
+v8.38 smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_1e0807f_smoke_easyhard_global_envelope512_v8_38_openmp14t
+```
+
+Config:
+
+```text
+commit=1e0807f
+snapshot_commit_max=512
+snapshot_global_gate=1
+snapshot_burst_total=64
+snapshot_burst_max=1
+proposal_edge_quota=16
+OpenMP threads=14
+```
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.38 | `newblue2` | 132.252900 | 76.516170 | 0.579x | 8780974 | 1.156x | 0 / 0 | legal but too slow |
+| v8.38 | `adaptec4` | 392 gate | 130.666544 | 0.333x | router log 2D WL 9006173 before layer | NA | timeout; 2D congestion 549 / 5, printed 2D 1098 / 10 | rejected |
+
+Evidence:
+
+```text
+newblue2: legal, but still slower than original and slower than the v5a/v4 legal baseline.
+adaptec4: threshold 512 activates too late. The hard row spends most time above 512, then reaches 2D route time 378.826s with residual overflow before layer assignment is killed by the 392s gate.
+```
+
+Classification:
+
+- The bounded global envelope is mechanically active on `newblue2`, but not
+  enough for hard rows because `snapshot_commit_max=512` delays the strict
+  repair path until the smoke budget is already nearly spent.
+- This run also exposed a real implementation pitfall: the global gate still
+  called `current_overflow_stats(congestion)` per proposal.  That serializes a
+  full-grid scan inside the deterministic commit stage, exactly the update-side
+  bottleneck warned by the parallel global-routing papers.
+
+v8.39 path-local global-gate delta:
+
+- keep the same NTHU-style route/proposal/legal-repair phases;
+- keep proposal route search parallel and deterministic commit order;
+- replace per-proposal full-grid overflow scans inside the global-gate fallback
+  with a path-local transaction check:
+  - collect the union of old-path and proposed-path edges;
+  - compute exact `total_overflow` delta on only those affected edges;
+  - keep `max_overflow` conservative during the transaction;
+  - run one full-grid `current_overflow_stats` at phase end to re-sync exact
+    counters for the next routing round.
+
+This follows the same search/update split as overlapped-region and SPRoute-style
+parallel routers: route search is parallel, the commit stage is exclusive and
+deterministic, but the commit test no longer repeatedly scans unrelated grid
+edges.
+
+v8.39 smoke:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_fd2fbfe_smoke_easyhard_pathlocal_gate1024_v8_39_openmp14t
+```
+
+Config:
+
+```text
+commit=fd2fbfe
+snapshot_commit_max=1024
+snapshot_global_gate=1
+snapshot_burst_total=64
+snapshot_burst_max=1
+proposal_edge_quota=16
+OpenMP threads=14
+```
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.39 | `newblue2` | 88.172075 | 76.516170 | 0.868x | 8780064 | 1.156x | 0 / 0 | legal, accepted for legal7 probe |
+| v8.39 | `adaptec4` | 270.712247 | 130.666544 | 0.483x | 13582650 | 1.113x | 0 / 0 | legal, accepted for legal7 probe |
+
+Evidence:
+
+```text
+newblue2: router log 84.777s, 3D overflow 0 / 0, WL 8780064.
+adaptec4: router log 264.974s, 3D overflow 0 / 0, WL 13582650.
+adaptec4: global-gated strict repair now commits many bounded proposals with commit_ms around 10-20ms per strict phase instead of serial full-grid scans.
+```
+
+Classification:
+
+- This is the first v8 aggressive smoke that is legal on both easy and hard
+  rows under the 3x kill gates.
+- It is not a speed win over original on `adaptec4`; the current value is
+  correctness plus a clear implementation improvement in the transaction gate.
+- The WL remains within about 1.16x on `newblue2` and 1.12x on `adaptec4`.
+  That is inside the earlier quality target, but the speed target is still not
+  met on hard rows.
+
+v8.39 legal7 full run:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_fd2fbfe_legal7_pathlocal_gate1024_v8_39_openmp14t
+```
+
+Status:
+
+```text
+started after v8.39 smoke passed
+commit=fd2fbfe
+same config as v8.39 smoke
+OpenMP threads=14
+PARALLEL_BENCH_JOBS=1
+```
+
+v8.39 legal7 early stop:
+
+```text
+decision: killed before full legal7 completion
+kill reason: clear strategy failure on first legal7 row, not a VM hang
+first row: adaptec1.capo70.3d.35.50.90
+runner pid: 2781566
+child timeout / NthuRoute process group: 2781588
+```
+
+Evidence at kill:
+
+```text
+NthuRoute used about 10x CPU, so the OpenMP proposal path was active.
+At about 6.5 minutes, adaptec1 was still in high-overflow P2 repair:
+  Adaptive repair P2 iteration 46
+  total_overflow=32162
+  max_overflow=52
+  total wire length=3684654
+  proposal reroute phase committed only 98 of 31566 proposed paths in the prior full phase
+  v8 strict legal repair skipped: total_overflow=32162 max_overflow=52 trigger=1 max_total=4096
+```
+
+Classification:
+
+- This is not a thread-utilization failure.  The process was using roughly ten
+  cores during proposal phases.
+- The problem is a strategy gate: `v8 strict legal repair` only enters when
+  `total_overflow <= 4096`, so large legal7 rows spend minutes in the weaker
+  high-overflow proposal loop.
+- The high-overflow proposal loop remains parallel, but its deterministic
+  improvement commit becomes extremely selective late in `adaptec1`; each phase
+  proposes about 31k paths and commits only about 100-200.
+- Because extrapolation showed it would not reach the strict-repair threshold
+  within the 3x gate, the run was killed and classified as a configuration /
+  strategy failure.
+
+v8.40 high-overflow strict-repair probe:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_fd2fbfe_smoke_easyhard_highstrict50000_v8_40_openmp14t
+```
+
+Config difference from v8.39:
+
+```text
+same commit=fd2fbfe
+same easy+hard smoke benchmarks: newblue2, adaptec4
+strict_legal_repair_max_overflow: 4096 -> 50000
+snapshot_commit_max_overflow: 1024 -> 50000
+strict repair max_candidates: 4096 -> 8192
+strict repair batch_size: 1024 -> 2048
+strict repair edge_quota: 8 -> 16
+snapshot burst envelope: 64 / 1 -> 128 / 2
+```
+
+Hypothesis:
+
+- Start the same proposal-only / deterministic-commit legal repair in the
+  high-overflow range instead of waiting for the low-overflow tail.
+- If this is valid, `adaptec4` should finish legally and faster than v8.39's
+  270.712247s without hurting `newblue2` beyond its 230s 3x gate.
+- If this is slower or illegal, the issue is not just the low threshold; the
+  strict snapshot batch itself is too expensive or accepts too many conflicting
+  proposals in high-overflow states.
+
+v8.40 smoke early stop:
+
+```text
+decision: killed during easy smoke
+runner pid: 2785511
+child timeout / NthuRoute process group: 2785534
+benchmark at kill: newblue2.fastplace90.3d.50.20.100
+```
+
+Evidence:
+
+```text
+NthuRoute used about 7.7x CPU, so proposal parallelism was active.
+At about 1.7 minutes, newblue2 was still running with total_overflow=1.
+The same pattern repeated across routing iterations:
+  v8 strict legal repair round 1..4 proposed 16 and committed 15 each
+  v8 strict legal repair phase proposed 64 committed 60 rejected 4
+  total_overflow stayed 1 and max_overflow stayed 1
+  proposal reroute then proposed 31 and committed 0
+```
+
+Classification:
+
+- This is an implementation issue in the transaction progress criterion.
+- The strict repair code treated `committed > 0` as progress even when global
+  overflow did not improve.
+- In a low-tail state that creates a repeated no-progress commit loop: routes
+  are changed, but the global legality objective is unchanged.
+
+v8.41 implementation fix:
+
+- After a strict-repair round, compare `stats.total_overflow/max_overflow`
+  against the round-start stats.
+- If paths were committed but the global overflow state did not improve, rollback
+  the selected paths to their round-start routes.
+- Count no-progress by global overflow improvement, not by number of committed
+  proposals.
+
+This preserves the paper-inspired transaction structure: proposal generation can
+still run in parallel, but commit is only retained when the deterministic global
+state actually improves.

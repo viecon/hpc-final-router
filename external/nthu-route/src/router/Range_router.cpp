@@ -2602,6 +2602,18 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
             rolled_back = true;
         }
 
+        const bool round_improved =
+                stats.total_overflow < round_start_stats.total_overflow ||
+                (stats.total_overflow == round_start_stats.total_overflow &&
+                        stats.max_overflow < round_start_stats.max_overflow);
+        if (!round_improved && committed > 0 && snapshot_rollback) {
+            restore_selected_originals();
+            stats = current_overflow_stats(congestion);
+            committed = 0;
+            rejected = proposed;
+            rolled_back = true;
+        }
+
         total_inputs += static_cast<int>(inputs.size());
         total_selected += static_cast<int>(selected.size());
         total_proposed += proposed;
@@ -2629,7 +2641,11 @@ void NTHUR::RangeRouter::run_v8_strict_legal_repair(
                     commit_ms_value);
         }
 
-        if (committed == 0) {
+        const bool progress =
+                stats.total_overflow < round_start_stats.total_overflow ||
+                (stats.total_overflow == round_start_stats.total_overflow &&
+                        stats.max_overflow < round_start_stats.max_overflow);
+        if (!progress) {
             ++no_progress_rounds;
             if (no_progress_rounds >= max_no_progress) {
                 break;
