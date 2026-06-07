@@ -3599,3 +3599,70 @@ Classification:
   The next probe should keep v8.57's normal P2 budget, allow lightweight
   low-tail before post only when total overflow is already small, reduce
   global-tail candidates, and rely more on self-ripup for the final tail.
+
+v8.59 mid-phase low-tail probe:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_da84d95_smoke_easyhard_midtail512_self1024_v8_59_openmp14t
+commit=da84d95
+code base=same router code as b7e2035; da84d95 is report-only
+NTHU_V8_STRICT_LEGAL_REPAIR_MAX_OVERFLOW=50000
+NTHU_V8_STRICT_ROLLBACK_NO_PROGRESS=1
+NTHU_V8_LOW_TAIL_POST_ONLY unset
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_LIMIT=1024
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_MAX_CANDIDATES=512
+NTHU_V8_LOW_TAIL_GLOBAL_REPAIR_ROUNDS=4
+NTHU_V8_LOW_TAIL_SELF_RIPUP_MAX_TESTS=1024
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.59 | `newblue2` | 171.621 internal router time | 76.516170 | 0.446x | 8816307 | 1.161x | 0 / 0 in router log | legal but slow; summary invalid |
+| v8.59 | `adaptec4` | killed at about 203s | 130.666544 | NA | NA | NA | about 50258 / 69 before kill | invalid |
+
+Evidence:
+
+```text
+newblue2:
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 4701999 + 4114308 = 8816307
+  time: 10.3847 171.621
+  summary.csv did not receive an ok row because the guard killed the runner
+  before the wrapper/checker finished writing the row
+adaptec4:
+  killed by the same guard action before a valid result was produced
+  last useful log state: total_overflow=50258, max_overflow=69
+  adaptive high-overflow P2 was still active; low-tail did not trigger early
+  enough to affect the hard row
+process control:
+  run_meta for both rows ended with exit_code=143, timeout=0
+```
+
+CPU/utilization finding:
+
+```text
+Sampled NthuRoute CPU stayed around 1.0x to 1.3x even though OpenMP exposed 14
+threads. The important implementation finding is that the runner maps
+NTHU_V8_PROPOSAL_PARALLEL=${V8_PROPOSAL_PARALLEL:-0}, and v8.55 through v8.59
+did not set V8_PROPOSAL_PARALLEL=1. Therefore the OpenMP proposal-search
+implementation existed in code, but these smoke runs were not exercising the
+actual proposal-level parallel path.
+```
+
+Classification:
+
+- Mid-phase low-tail scheduling is rejected for this configuration. It makes
+  the easy row legal but much slower, and it did not help the hard row before
+  the guard kill.
+- The hard result is invalid due to the guard bug. Future polling must not
+  kill just because `NthuRoute` has exited while `summary.csv` still contains
+  only the header; it must wait for the wrapper/checker or a run_meta terminal
+  state.
+- The next probe should isolate the missing parallelism by enabling
+  `V8_PROPOSAL_PARALLEL=1` on the v8.57-style configuration. To avoid
+  oversubscribing the 16-core VM with two 14-thread routers, that probe should
+  run the easy and hard smoke rows sequentially inside one run directory while
+  each router is allowed to use 14 OpenMP threads.
