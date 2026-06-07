@@ -1323,6 +1323,57 @@ paper-inspired proposal/commit structure, but the low-tail commit gate is global
 instead of local, so one locally acceptable candidate cannot silently increase
 overall overflow.
 
+### v8.5 Low-Tail Global Commit Result
+
+Commit:
+
+```text
+dc92a5f Add v8 low-tail global repair
+```
+
+Run roots:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_dc92a5f_smoke_009_easy_globaltail_14t
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_dc92a5f_smoke_010_hard_globaltail_14t
+```
+
+Result:
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.5 | v8.4 + low-tail global commit | `newblue2` | 65.319120 | 76.516170 | 1.171x | 1.158 | 0 / 0 | legal, faster |
+| v8.5 | same | `adaptec4` | 132.181477 | 130.666544 | 0.989x | 1.111 | 2 / 2 | rejected, illegal |
+
+Diagnosis:
+
+- The global commit gate is safe, but it did not find an acceptable candidate
+  for the hard low-tail case.
+- In the hard log, the tail phase entered `total_overflow=1` internally
+  (evaluator reports `2/2`) and repeatedly collected 32 inputs, but only 0-2
+  proposals were generated.  The few generated proposals were rejected by the
+  global gate.
+- Therefore the bottleneck is proposal generation under the direct P2
+  `BOXSIZE_INC=5` search box, not the deterministic commit rule.
+
+### v8.6 Low-Tail Wide-Box Proposal Plan
+
+Code change:
+
+- keep the v8.5 global commit gate;
+- during only the v8 low-tail proposal phase, temporarily increase
+  `construct_2d_tree.BOXSIZE_INC` from the P2 value to
+  `NTHU_V8_LOW_TAIL_BOX_INC` (default 66);
+- restore the original box size immediately after the parallel proposal phase;
+- do not switch by benchmark name and do not re-enable serial `range_router()`
+  fallback.
+
+Hypothesis:
+
+- high-overflow routing remains the same fast direct proposal strategy;
+- low-tail proposal gets enough search area to produce legal alternatives;
+- deterministic global commit prevents the v8.3 oversubscribe failure mode.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:

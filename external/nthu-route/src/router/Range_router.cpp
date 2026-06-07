@@ -271,6 +271,14 @@ int v8_low_tail_global_repair_rounds() {
     return std::max(1, std::atoi(value));
 }
 
+int v8_low_tail_box_inc() {
+    const char* value = std::getenv("NTHU_V8_LOW_TAIL_BOX_INC");
+    if (value == nullptr || *value == '\0') {
+        return 0;
+    }
+    return std::max(0, std::atoi(value));
+}
+
 int proposal_reroute_overflow_edge_quota() {
     const char* value = std::getenv("NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA");
     if (value == nullptr || *value == '\0') {
@@ -2136,6 +2144,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                     tail_stats.total_overflow <= tail_limit) {
                 const int tail_rounds = v8_low_tail_global_repair_rounds();
                 const int tail_max_candidates = v8_low_tail_global_repair_max_candidates();
+                const int tail_box_inc = v8_low_tail_box_inc();
                 int tail_total_inputs = 0;
                 int tail_total_proposed = 0;
                 int tail_total_committed = 0;
@@ -2168,6 +2177,10 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
 
                     std::vector<RerouteProposal> tail_proposals(tail_inputs.size());
                     const auto tail_proposal_start = ProfileClock::now();
+                    const int original_boxsize_inc = construct_2d_tree.BOXSIZE_INC;
+                    if (tail_box_inc > original_boxsize_inc) {
+                        construct_2d_tree.BOXSIZE_INC = tail_box_inc;
+                    }
 #ifdef NTHU_ROUTE_OPENMP
 #pragma omp parallel
                     {
@@ -2193,6 +2206,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                                 tail_proposals[i].path, false, tail_inputs[i].overflow_score);
                     }
 #endif
+                    construct_2d_tree.BOXSIZE_INC = original_boxsize_inc;
                     const double tail_proposal_ms_value = profile_ms(tail_proposal_start, ProfileClock::now());
 
                     const auto tail_commit_start = ProfileClock::now();
@@ -2254,20 +2268,20 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                     tail_total_commit_ms += tail_commit_ms_value;
 
                     if (do_log) {
-                        log_sp->info("v8 low-tail global repair round={} inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} limit={} proposal_ms={:.3f} commit_ms={:.3f}",
+                        log_sp->info("v8 low-tail global repair round={} inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} limit={} box_inc={} proposal_ms={:.3f} commit_ms={:.3f}",
                                 tail_round, tail_inputs.size(), tail_proposed, tail_committed,
                                 tail_rejected, tail_stats.total_overflow, tail_stats.max_overflow,
-                                tail_limit, tail_proposal_ms_value, tail_commit_ms_value);
+                                tail_limit, tail_box_inc, tail_proposal_ms_value, tail_commit_ms_value);
                     }
                     if (tail_committed == 0) {
                         break;
                     }
                 }
                 if (do_log) {
-                    log_sp->info("v8 low-tail global repair phase inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} limit={} proposal_ms={:.3f} commit_ms={:.3f}",
+                    log_sp->info("v8 low-tail global repair phase inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} limit={} box_inc={} proposal_ms={:.3f} commit_ms={:.3f}",
                             tail_total_inputs, tail_total_proposed, tail_total_committed,
                             tail_total_rejected, tail_stats.total_overflow, tail_stats.max_overflow,
-                            tail_limit, tail_total_proposal_ms, tail_total_commit_ms);
+                            tail_limit, tail_box_inc, tail_total_proposal_ms, tail_total_commit_ms);
                 }
             }
         }
