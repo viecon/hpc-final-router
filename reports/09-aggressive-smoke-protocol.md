@@ -1850,6 +1850,39 @@ v8.13 strict-tail design:
 - use this as a targeted `bigblue1` probe with the same routing-state tail
   trigger, not a benchmark-name branch.
 
+v8.13 strict-tail result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_b0ba5b8_bigblue1_stricttail25k_14t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.13 probe | strict-capacity low-tail commit, 25k gate | `bigblue1` | 414.349595 | 1206.306768 | 2.911x | 1.241 | 34978 / 10 | rejected, still illegal |
+
+Key evidence:
+
+```text
+v8 low-tail self-ripup round=1 inputs=240 proposed=240 committed=0 rejected=240 ... strict_capacity=1
+```
+
+Classification:
+
+- Strict commit alone does not work because the v8 proposal generator still
+  uses the normal NTHU maze path.  It proposes paths that improve congestion
+  cost but are not strict-capacity insertions.
+- The existing strict legal maze helper is only wired into the original
+  in-place `range_router()` fallback, not into `propose_reroute_path()`.
+
+v8.14 strict-proposal design:
+
+- reuse existing `find_strict_legal_maze_path()` inside `propose_reroute_path`;
+- only activate through `NTHU_STRICT_LEGAL_MAZE=1`, with normal defaults off;
+- combine with the v8 low-tail strict commit probe so proposal generation and
+  commit acceptance agree on strict-capacity legality;
+- this follows the DSD 2013 route-search/candidate-validate/update split more
+  closely than v8.13 did.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:

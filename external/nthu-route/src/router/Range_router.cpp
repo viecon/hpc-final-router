@@ -455,7 +455,11 @@ bool post_accept_improvement_enabled() {
 }
 
 bool strict_legal_maze_enabled() {
-    return std::getenv("NTHU_STRICT_LEGAL_MAZE") != nullptr;
+    const char* value = std::getenv("NTHU_STRICT_LEGAL_MAZE");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
 }
 
 bool bounded_length_reroute_enabled() {
@@ -499,7 +503,11 @@ double bounded_length_ratio() {
 }
 
 bool strict_legal_maze_post_only_enabled() {
-    return std::getenv("NTHU_STRICT_LEGAL_MAZE_POST_ONLY") != nullptr;
+    const char* value = std::getenv("NTHU_STRICT_LEGAL_MAZE_POST_ONLY");
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    return std::atoi(value) != 0;
 }
 
 int strict_legal_maze_max_area() {
@@ -1732,8 +1740,22 @@ bool NTHUR::RangeRouter::propose_reroute_path(const Two_pin_element_2d& two_pin,
                 bounded_length_phase_enabled(version, congestion.cur_iter);
         const int max_path_edges =
                 bounded_length_enabled_this_phase ? bounded_length_limit(original_path) : -1;
-        find_path_flag = local_maze->mm_maze_route_p(candidate, bound.cost, bound.distance,
-                bound.via_num, start, end, version, max_path_edges);
+        const bool strict_legal_enabled_this_phase = strict_legal_maze_enabled() &&
+                (!strict_legal_maze_post_only_enabled() || version == 3) &&
+                congestion.cur_iter >= strict_legal_maze_min_iter();
+        if (strict_legal_enabled_this_phase) {
+            std::vector<Coordinate_2d> legal_path;
+            if (find_strict_legal_maze_path(candidate, congestion, start, end, legal_path)) {
+                candidate.path = std::move(legal_path);
+                candidate.pin1 = candidate.path.front();
+                candidate.pin2 = candidate.path.back();
+                find_path_flag = true;
+            }
+        }
+        if (!find_path_flag) {
+            find_path_flag = local_maze->mm_maze_route_p(candidate, bound.cost, bound.distance,
+                    bound.via_num, start, end, version, max_path_edges);
+        }
     }
 
     if (!find_path_flag || candidate.path.size() < 2) {
