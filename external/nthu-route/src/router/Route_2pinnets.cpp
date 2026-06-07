@@ -177,7 +177,8 @@ void Route_2pinnets::route_all_2pin_net() {
             return a.id < b.id;
         });
 
-        const int limit = v8_direct_route_all_limit();
+        const int limit = construct_2d_tree.v8_direct_route_all_limit_override > 0 ?
+                construct_2d_tree.v8_direct_route_all_limit_override : v8_direct_route_all_limit();
         const int route_count = std::min(static_cast<int>(candidates.size()), limit);
         std::vector<Two_pin_element_2d*> reroute_candidates;
         reroute_candidates.reserve(route_count);

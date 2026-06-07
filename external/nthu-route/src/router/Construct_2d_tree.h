@@ -80,6 +80,9 @@ struct Construct_2d_tree {
     int BOXSIZE_INC;
     bool force_route_remainder;
     bool force_direct_overflow_candidates;
+    int v8_direct_route_all_limit_override;
+    int v8_proposal_max_candidates_override;
+    int v8_proposal_batch_size_override;
     std::vector<TreeFlute> net_flutetree;
 
     std::vector<bool> NetDirtyBit;

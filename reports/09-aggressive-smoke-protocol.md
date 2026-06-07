@@ -1500,6 +1500,73 @@ Decision:
   rounds 12;
 - rerun smoke before legal7 because the default changed.
 
+### v8.8 Fixed High-Coverage Smoke Rejection
+
+Run roots:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_d1c96d1_smoke_016_easy_highcovp2x32_14t
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_d1c96d1_smoke_017_hard_highcovp2x32_14t
+```
+
+Result:
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.8 | fixed 32k direct/proposal, P2 max 32 | `newblue2` | 90.584202 | 76.516170 | 0.845x | 1.156 | 0 / 0 | rejected, legal but slower |
+| v8.8 | same | `adaptec4` | 151.274472 | 130.666544 | 0.864x | 1.111 | 0 / 0 | rejected, legal but slower |
+
+Diagnosis:
+
+- fixed high coverage solves residual overflow but charges every benchmark the
+  large-case repair cost;
+- this contradicts the single-strategy goal because easy and hard smoke both
+  become slower than original even though v8.7 was faster on both;
+- high coverage should be a runtime fallback for cases where the fast path
+  leaves residual overflow, not the default path.
+
+### v8.9 Runtime Emergency Repair Design
+
+Implementation branch:
+
+```text
+experiment-v8-aggressive-parallel
+```
+
+Design:
+
+- restore the v8.7 fast defaults for normal execution: direct limit 16384,
+  proposal max candidates 16384, proposal batch 4096, adaptive repair P2 max 8,
+  high-overflow P2 max 16, final full-remainder rounds 6;
+- add a `NTHU_V8_EMERGENCY_REPAIR` phase that activates only when measured 2-D
+  overflow remains after the normal adaptive/final repair flow;
+- during the emergency phase, temporarily override direct/proposal budgets to
+  the high-coverage values: direct limit 32768, proposal max candidates 32768,
+  proposal batch 8192, P2 max 32;
+- proposal generation remains parallel and commit remains deterministic and
+  exclusive; this follows the proposal/commit direction of overlapped-region
+  parallel routing while avoiding the fixed highcov cost on already-legal rows;
+- no benchmark name or benchmark family is used.  The trigger is only runtime
+  routing state: remaining overflow after the fast path.
+
+Paper mapping:
+
+| Paper direction | What v8.9 borrows | Why it matches the current failure |
+| --- | --- | --- |
+| NCTU-GR 2.0 collision-aware task routing | keep conflict-aware candidate scheduling and avoid blindly oversubscribing hot edges | v8.3 showed unsafe oversubscription creates massive overflow |
+| DSD 2013 overlapped routing regions | parallel route-search/proposal with exclusive area-update/commit | proposal path can use threads safely while commit stays deterministic |
+| SPRoute 2019 two-phase parallelism | fast high-parallelism path first, stronger repair only when progress is insufficient | fixed highcov was legal but too slow on easy/hard smoke |
+| SPRoute 2.0 bulk-synchronous determinism | route from a shared snapshot, then deterministic commit | keeps results reproducible and avoids racing global congestion updates |
+
+Next experiment:
+
+- rebuild current source on VM;
+- run easy+hard smoke with v8.9 defaults;
+- if both smoke rows are legal and not slower than v8.7 by more than the gate,
+  rerun `legal7`;
+- if a smoke row is slower than 3x original, kill the process group and
+  classify the issue before continuing.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:

@@ -52,6 +52,10 @@ bool adaptive_legal_repair_enabled() {
     return std::getenv("NTHU_ADAPTIVE_LEGAL_REPAIR") != nullptr;
 }
 
+bool v8_emergency_repair_enabled() {
+    return std::getenv("NTHU_V8_EMERGENCY_REPAIR") != nullptr;
+}
+
 int adaptive_direct_overflow_limit() {
     return std::max(0, env_int("NTHU_ADAPTIVE_DIRECT_OVERFLOW_LIMIT", 0));
 }
@@ -743,6 +747,9 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
     log_sp = spdlog::get("NTHUR");
     force_route_remainder = false;
     force_direct_overflow_candidates = false;
+    v8_direct_route_all_limit_override = 0;
+    v8_proposal_max_candidates_override = 0;
+    v8_proposal_batch_size_override = 0;
     /***********************
      * Global Variable End
      * ********************/
@@ -1055,6 +1062,91 @@ Construct_2d_tree::Construct_2d_tree(const RoutingParameters& routingparam,const
                 force_route_remainder = false;
                 output_2_pin_list();
                 post_processing.process(route_2pinnets);
+                cur_overflow = congestion.cal_max_overflow();
+            }
+
+            const int emergency_trigger = std::max(trigger,
+                    std::max(0, env_int("NTHU_V8_EMERGENCY_REPAIR_TRIGGER", 0)));
+            const int emergency_max_iter = env_int("NTHU_V8_EMERGENCY_P2_MAX_ITER", congestion.cur_iter);
+            if (v8_emergency_repair_enabled() && cur_overflow > emergency_trigger &&
+                    emergency_max_iter > congestion.cur_iter) {
+                const int old_direct_limit_override = v8_direct_route_all_limit_override;
+                const int old_proposal_max_override = v8_proposal_max_candidates_override;
+                const int old_proposal_batch_override = v8_proposal_batch_size_override;
+                const bool old_force_direct = force_direct_overflow_candidates;
+                const bool old_force_remainder = force_route_remainder;
+
+                v8_direct_route_all_limit_override =
+                        std::max(1, env_int("NTHU_V8_EMERGENCY_DIRECT_LIMIT", 32768));
+                v8_proposal_max_candidates_override =
+                        std::max(1, env_int("NTHU_V8_EMERGENCY_PROPOSAL_MAX_CANDIDATES", 32768));
+                v8_proposal_batch_size_override =
+                        std::max(1, env_int("NTHU_V8_EMERGENCY_PROPOSAL_BATCH_SIZE", 8192));
+
+                log_sp->info("v8 emergency repair enabled: overflow={} trigger={} current_iter={} max_iter={} direct_limit={} proposal_max={} proposal_batch={}",
+                        cur_overflow, emergency_trigger, congestion.cur_iter, emergency_max_iter,
+                        v8_direct_route_all_limit_override, v8_proposal_max_candidates_override,
+                        v8_proposal_batch_size_override);
+
+                force_direct_overflow_candidates = true;
+                force_route_remainder = false;
+                route_2pinnets.reallocate_two_pin_list();
+                mazeroute_in_range.clear_net_tree();
+                congestion.used_cost_flag = HISTORY_COST;
+
+                for (int iter = congestion.cur_iter + 1; iter <= emergency_max_iter; ++iter) {
+                    congestion.cur_iter = iter;
+                    done_iter = congestion.cur_iter;
+                    log_sp->info("V8 emergency repair P2 iteration: {} ", congestion.cur_iter);
+
+                    congestion.factor = (1.0 - std::exp(-5 * std::exp(-(0.1 * congestion.cur_iter))));
+                    congestion.WL_Cost = congestion.factor;
+                    congestion.via_cost = static_cast<int>(4 * congestion.factor);
+
+                    auto iter_start = ProfileClock::now();
+                    profile_start = ProfileClock::now();
+                    congestion.pre_evaluate_congestion_cost();
+                    const double pre_eval_ms = profile_ms(profile_start, ProfileClock::now());
+
+                    profile_start = ProfileClock::now();
+                    route_2pinnets.route_all_2pin_net();
+                    const double route_all_ms = profile_ms(profile_start, ProfileClock::now());
+
+                    profile_start = ProfileClock::now();
+                    cur_overflow = congestion.cal_max_overflow();
+                    const double overflow_ms = profile_ms(profile_start, ProfileClock::now());
+                    profile_start = ProfileClock::now();
+                    congestion.cal_total_wirelength();
+                    const double wirelength_ms = profile_ms(profile_start, ProfileClock::now());
+                    if (do_profile) {
+                        log_sp->info("profile v8_emergency_iter={} pre_eval_ms={:.3f} route_all_ms={:.3f} overflow_ms={:.3f} wirelength_ms={:.3f} total_ms={:.3f}",
+                                congestion.cur_iter, pre_eval_ms, route_all_ms, overflow_ms,
+                                wirelength_ms, profile_ms(iter_start, ProfileClock::now()));
+                    }
+                    if (cur_overflow == 0) {
+                        log_sp->info("V8 emergency repair reached overflow = 0");
+                        break;
+                    }
+
+                    profile_start = ProfileClock::now();
+                    route_2pinnets.reallocate_two_pin_list();
+                    if (do_profile) {
+                        log_sp->info("profile v8_emergency_iter={} reallocate_two_pin_list_ms={:.3f}",
+                                congestion.cur_iter, profile_ms(profile_start, ProfileClock::now()));
+                    }
+                    BOXSIZE_INC += routingparam.get_box_size_inc_p2();
+                }
+
+                force_direct_overflow_candidates = old_force_direct;
+                force_route_remainder = old_force_remainder;
+                v8_direct_route_all_limit_override = old_direct_limit_override;
+                v8_proposal_max_candidates_override = old_proposal_max_override;
+                v8_proposal_batch_size_override = old_proposal_batch_override;
+
+                output_2_pin_list();
+                post_processing.process(route_2pinnets);
+                cur_overflow = congestion.cal_max_overflow();
+                log_sp->info("v8 emergency repair complete: overflow={}", cur_overflow);
             }
         } else {
             log_sp->info("adaptive legal repair skipped: overflow={} trigger={}", cur_overflow, trigger);

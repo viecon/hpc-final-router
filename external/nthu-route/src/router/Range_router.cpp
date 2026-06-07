@@ -1864,8 +1864,10 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         }
         const bool allow_maze = proposal_reroute_maze_enabled();
         const bool conflict_aware = proposal_reroute_conflict_aware_enabled();
-        const int max_candidates = proposal_reroute_max_candidates();
-        const int batch_size = proposal_reroute_batch_size();
+        const int max_candidates = construct_2d_tree.v8_proposal_max_candidates_override > 0 ?
+                construct_2d_tree.v8_proposal_max_candidates_override : proposal_reroute_max_candidates();
+        const int batch_size = construct_2d_tree.v8_proposal_batch_size_override > 0 ?
+                construct_2d_tree.v8_proposal_batch_size_override : proposal_reroute_batch_size();
         const int max_rounds = proposal_reroute_max_rounds();
         const bool overflow_edge_conflict = conflict_aware && proposal_reroute_overflow_edge_conflict_enabled();
         const int overflow_edge_quota = proposal_reroute_overflow_edge_quota();
