@@ -231,6 +231,14 @@ bool proposal_reroute_adaptive_rounds_enabled() {
     return std::getenv("NTHU_PROPOSAL_REROUTE_ADAPTIVE_ROUNDS") != nullptr;
 }
 
+bool v8_reject_cooldown_enabled() {
+    return std::getenv("NTHU_V8_REJECT_COOLDOWN") != nullptr;
+}
+
+bool v8_low_overflow_edge_oversubscribe_enabled() {
+    return std::getenv("NTHU_V8_LOW_OVERFLOW_EDGE_OVERSUBSCRIBE") != nullptr;
+}
+
 int proposal_reroute_overflow_edge_quota() {
     const char* value = std::getenv("NTHU_PROPOSAL_REROUTE_OVERFLOW_EDGE_QUOTA");
     if (value == nullptr || *value == '\0') {
@@ -1819,6 +1827,9 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
         int total_proposal_rejects = 0;
         double total_proposal_ms = 0.0;
         double total_commit_ms = 0.0;
+        const bool reject_cooldown = v8_reject_cooldown_enabled();
+        const bool low_overflow_edge_oversubscribe = v8_low_overflow_edge_oversubscribe_enabled();
+        std::unordered_set<Two_pin_element_2d*> rejected_this_phase;
 
         OverflowStats phase_start_overflow;
         int effective_max_rounds = max_rounds;
@@ -1834,6 +1845,10 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             std::vector<ProposalInput> proposal_inputs;
             proposal_inputs.reserve(twopin_list.size());
             for (Two_pin_element_2d* two_pin : twopin_list) {
+                if (reject_cooldown &&
+                        rejected_this_phase.find(two_pin) != rejected_this_phase.end()) {
+                    continue;
+                }
                 const int overflow_score = path_overflow_score(*two_pin, congestion);
                 if (overflow_score >= min_reroute_score) {
                     proposal_inputs.push_back(ProposalInput { two_pin, overflow_score });
@@ -1861,6 +1876,11 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 std::unordered_set<int> selected_net_ids;
                 selected_net_ids.reserve(std::min(batch_size, static_cast<int>(proposal_inputs.size())));
                 if (overflow_edge_conflict) {
+                    const bool oversubscribe_low_edges =
+                            low_overflow_edge_oversubscribe &&
+                            phase_start_overflow.total_overflow > 0 &&
+                            low_overflow_limit > 0 &&
+                            phase_start_overflow.total_overflow <= low_overflow_limit;
                     std::unordered_map<std::uint64_t, int> selected_overflow_edges;
                     selected_overflow_edges.reserve(std::min(batch_size * 4, static_cast<int>(proposal_inputs.size()) * 2));
                     std::vector<OverflowEdgeRef> overflow_edges;
@@ -1874,7 +1894,8 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                             for (const OverflowEdgeRef& edge : overflow_edges) {
                                 const auto edge_count = selected_overflow_edges.find(edge.key);
                                 const int used_count = edge_count == selected_overflow_edges.end() ? 0 : edge_count->second;
-                                const int edge_limit = std::min(overflow_edge_quota, edge.overuse);
+                                const int edge_limit = oversubscribe_low_edges ?
+                                        overflow_edge_quota : std::min(overflow_edge_quota, edge.overuse);
                                 if (used_count >= edge_limit) {
                                     conflict = true;
                                     break;
@@ -1985,6 +2006,9 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
             for (int proposal_index = 0; proposal_index < static_cast<int>(proposals.size()); ++proposal_index) {
                 RerouteProposal& proposal = proposals[proposal_index];
                 if (!proposal.proposed) {
+                    if (reject_cooldown) {
+                        rejected_this_phase.insert(proposal.two_pin);
+                    }
                     if (ripup_before_propose && ripped_paths[proposal_index].removed) {
                         congestion.update_congestion_map_insert_two_pin_net(*proposal.two_pin);
                     }
@@ -2009,6 +2033,9 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                 } else {
                     proposal.rejected = true;
                     ++proposal_rejects;
+                    if (reject_cooldown) {
+                        rejected_this_phase.insert(proposal.two_pin);
+                    }
                 }
                 if (evaluated_global_gate) {
                     ++proposal_global_tests;
@@ -2042,6 +2069,9 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                         proposal_ms_value, commit_ms_value);
             }
             if (proposal_commits == 0) {
+                if (reject_cooldown && proposal_rejects + (static_cast<int>(overflow_twopins.size()) - proposal_success) > 0) {
+                    continue;
+                }
                 break;
             }
         }

@@ -1180,6 +1180,60 @@ Smoke gate:
 - if a row is slower than 3x or illegal, classify as implementation/support vs
   invalid optimization logic before changing direction.
 
+### v8 Smoke Results And Scheduler Fix
+
+Initial commit:
+
+```text
+6d630e5 Add v8 direct proposal reroute experiment
+```
+
+Run roots:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_6d630e5_smoke_001_easy_14t
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_6d630e5_smoke_002_hard_14t
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_6d630e5_smoke_003_easy_16k_r4_14t
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_6d630e5_smoke_004_easy_16k_r6_14t
+/home/ubuntu/hpc-final-router/results/vm_aggressive_smoke/frontier_v8_direct_proposal_6d630e5_smoke_005_hard_16k_r6_14t
+```
+
+| Version | Config | Benchmark | Seconds | Original seconds | Speedup | WL ratio | Overflow | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v8.0 | 32k candidates, 8k batch, 6 rounds, edge quota 12 | `newblue2` | 89.192446 | 76.516170 | 0.858x | 1.158 | 0 / 0 | legal but slower |
+| v8.0 | same | `adaptec4` | 140.773463 | 130.666544 | 0.928x | 1.112 | 0 / 0 | legal but slower |
+| v8.1 | 16k candidates, 4k batch, 4 rounds, edge quota 8 | `newblue2` | 76.114445 | 76.516170 | 1.005x | 1.160 | 2 / 2 | rejected, illegal |
+| v8.2 | 16k candidates, 4k batch, 6 rounds, edge quota 8 | `newblue2` | 69.379286 | 76.516170 | 1.103x | 1.160 | 0 / 0 | promising |
+| v8.2 | same | `adaptec4` | 122.955319 | 130.666544 | 1.063x | 1.111 | 2 / 2 | rejected, illegal |
+
+Diagnosis:
+
+- The v8 direct hot-set path successfully creates parallel work.  During hard
+  smoke, `NthuRoute` reached about 5x-7x CPU in the proposal phases.
+- The scan/sort part is cheap.  Example `adaptec4` first P2 direct round:
+  `scan_sort_ms=49.924`, but `proposal_ms=25879.529`.
+- v8.0 was legal because it overfed proposal work, but that erased the range
+  bypass speed gain.
+- v8.1/v8.2 became fast enough, but hard/easy residual tails exposed a
+  scheduler bug: when only one overflow edge remains, the conflict selector
+  caps that edge at one candidate because `edge_limit=min(edge_quota, overuse)`.
+  If that candidate is rejected, later rounds tend to retry the same class of
+  candidate and leave a `2/2` overflow tail.
+
+Follow-up code change:
+
+- add `NTHU_V8_REJECT_COOLDOWN=1` to skip rejected candidates within the same
+  proposal phase;
+- add `NTHU_V8_LOW_OVERFLOW_EDGE_OVERSUBSCRIBE=1` so low-overflow phases may
+  select up to `edge_quota` candidates on the same overflow edge and let
+  deterministic commit choose a safe winner;
+- keep the algorithm proposal-only: no serial `range_router()` fallback is
+  added for v8.
+
+This is classified as a support/scheduler issue inside the same direct-proposal
+experiment, not a rejection of the v8 idea yet.  Rebuild and rerun the same
+easy+hard smoke after committing the scheduler fix.
+
 ## Guard Expansion: original-legal legal7
 
 Helper:
