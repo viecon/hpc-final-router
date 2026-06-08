@@ -4238,3 +4238,75 @@ Classification:
   hard commit time increases relative to v8.66, likely because the smaller
   candidate pool leaves a harder residual for commit/self-ripup.
 - Current best remains v8.66.
+
+v8.69 threshold 768 with low-tail max candidates 1536:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_5d25b8d_smoke_easyhard_direct8192_minscore2_exit768_tailcand1536_v8_69_openmp14t
+commit=5d25b8d
+code base=same router code as d76619c; 5d25b8d is report-only
+base config=v8.66
+V8_ADAPTIVE_LOW_TAIL_EXIT_LIMIT=768
+V8_LOW_TAIL_GLOBAL_REPAIR_MAX_CANDIDATES=1536
+V8_DIRECT_ROUTE_ALL_LIMIT=8192
+V8_DIRECT_ROUTE_ALL_MIN_SCORE=2
+VM=finalrouter-5952912-iaas, 16 vCPU Intel Xeon Skylake, OpenMP enabled,
+  OMP_NUM_THREADS=14, OMP_PROC_BIND=close, OMP_PLACES=cores
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.69 | `newblue2` | 76.942133 | 76.516170 | 0.994x | 8819003 | 1.161x | 0 / 0 | legal but slightly slower than original |
+| v8.69 | `adaptec4` | 246.774229 | 130.666544 | 0.529x | 13582485 | 1.113x | 0 / 0 | legal but slower than v8.66 |
+
+Evidence:
+
+```text
+summary_with_baseline:
+  newblue2 passes_original_legal_guard=True, candidate_legal=True
+  adaptec4 passes_original_legal_guard=True, candidate_legal=True
+newblue2:
+  NthuRoute internal time: 9.7679 73.5245
+  v8 adaptive low-tail exit: overflow=704 limit=768 iter=8 max_iter=16
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 4698763 + 4120240 = 8819003
+  low-tail global phase after exit: total_overflow=90, max_overflow=4,
+    proposal_ms=5208.955, commit_ms=4203.409
+  self-ripup then cleared 90 -> 0, elapsed_ms=1829.694
+adaptec4:
+  NthuRoute internal time: 15.4745 241.091
+  v8 adaptive low-tail exit: overflow=613 limit=768 iter=38 max_iter=48
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 9006755 + 4575730 = 13582485
+  low-tail global phase after exit: total_overflow=99, max_overflow=4,
+    proposal_ms=2597.904, commit_ms=7307.780
+  self-ripup then cleared 99 -> 0 over four rounds, elapsed_ms=4458.071
+utilization samples:
+  newblue2 early ps sample: NthuRoute about 221% CPU
+  adaptec4 early ps sample: NthuRoute about 113% CPU
+  adaptec4 mid-run ps sample: NthuRoute about 678% CPU
+aggregate:
+  legal=2/2
+  candidate_seconds=323.716362
+  original_seconds=207.182714
+  suite_speedup=0.640x
+  speedup versus v8.66 smoke seconds=0.993x
+```
+
+Classification:
+
+- Rejected as a best config. It remains legal on both original-legal smoke
+  rows, but does not beat v8.66 on aggregate time.
+- Candidate cap 1536 is between v8.66's 2048 and v8.68's 1024, but the result
+  is also between them only weakly. The hard row still spends about 7.3s in
+  low-tail global commit and about 4.5s in self-ripup after the adaptive exit.
+- The instantaneous CPU samples confirm the same structural issue as prior
+  v8 runs: route proposal has parallel work, but the run repeatedly returns to
+  sequential or low-utilization commit/repair phases. The next code experiment
+  should target commit batching or conflict-separated low-tail self-ripup
+  rather than only changing candidate counts.
+- Current best remains v8.66.
