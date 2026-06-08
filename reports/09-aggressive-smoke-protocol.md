@@ -4487,3 +4487,57 @@ Classification:
 - The useful direction is now clearer: preserve mode-2 proposal parallelism,
   but improve residual tail clearing so hard cases do not pay back the saved
   self-ripup time as extra post iterations.
+
+v8.72 mode-2 self-ripup with larger box:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_905530c_smoke_easyhard_direct8192_minscore2_exit768_tailselfproposal2_box256_v8_72_openmp14t
+commit=905530c
+base config=v8.71
+V8_LOW_TAIL_SELF_RIPUP_PROPOSAL=2
+V8_LOW_TAIL_SELF_RIPUP_BOX_INC=256
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.72 | `newblue2` | 76.040272 | 76.516170 | 1.006x | 8823601 | 1.162x | 0 / 0 | legal but slower than v8.71 easy |
+| v8.72 | `adaptec4` | 278.459677 | 130.666544 | 0.469x | 13582230 | 1.113x | 2 / 2 | illegal; fails original-legal guard |
+
+Evidence:
+
+```text
+summary_with_baseline:
+  newblue2 passes_original_legal_guard=True, candidate_legal=True
+  adaptec4 passes_original_legal_guard=False, candidate_legal=False
+newblue2:
+  NthuRoute internal time: 9.60224 72.5964
+  total wire length = 4701549 + 4122052 = 8823601
+  3D # of overflow = 0
+  3D max overflow = 0
+adaptec4:
+  NthuRoute internal time: 15.2709 272.44
+  final 2D sum overflow = 2
+  final 2D max overflow = 2
+  3D # of overflow = 2
+  3D max overflow = 2
+  3D overflow edge number = 1
+  total wire length = 9006392 + 4575838 = 13582230
+  verifier: total_overflow=2, max_overflow=2, overflowed_nets=15,
+    overflowed_edges=1
+aggregate:
+  legal=1/2
+  candidate_seconds=354.499949
+  original_seconds=207.182714
+  suite_speedup=0.584x
+```
+
+Classification:
+
+- Rejected. It fails the original-legal guard on `adaptec4`.
+- Larger self-ripup box does not solve the mode-2 residual-tail problem. It
+  increases search cost, worsens `newblue2` WL/time, and still leaves one hard
+  2D overflow that becomes illegal after layer assignment.
+- Current best remains v8.66. Current best parallel self-ripup variant remains
+  v8.71, but it is not faster than v8.66 overall.
