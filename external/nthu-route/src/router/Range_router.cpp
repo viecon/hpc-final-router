@@ -355,10 +355,6 @@ int v8_low_tail_self_ripup_proposal_mode() {
     return std::max(0, std::atoi(value));
 }
 
-bool v8_low_tail_self_ripup_proposal_enabled() {
-    return v8_low_tail_self_ripup_proposal_mode() > 0;
-}
-
 int v8_low_tail_self_ripup_box_inc() {
     const char* value = std::getenv("NTHU_V8_LOW_TAIL_SELF_RIPUP_BOX_INC");
     if (value == nullptr || *value == '\0') {

@@ -4415,3 +4415,75 @@ Implementation delta versus v8.70:
 - This keeps all congestion mutation outside the OpenMP region while giving
   the proposal search the same "old path removed" condition that the serial
   self-ripup path relied on.
+
+v8.71 result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_a6f69fb_smoke_easyhard_direct8192_minscore2_exit768_tailselfproposal2_v8_71_openmp14t
+commit=a6f69fb
+base config=v8.66
+V8_LOW_TAIL_SELF_RIPUP_PROPOSAL=2
+build=passed on VM, build-release-vm-openmp-ON
+build warning=unused v8_low_tail_self_ripup_proposal_enabled helper; removed
+  in the next cleanup commit
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.71 | `newblue2` | 73.631365 | 76.516170 | 1.039x | 8818567 | 1.161x | 0 / 0 | legal and faster than original |
+| v8.71 | `adaptec4` | 247.945847 | 130.666544 | 0.527x | 13581773 | 1.113x | 0 / 0 | legal but slower than v8.66 hard |
+
+Evidence:
+
+```text
+summary_with_baseline:
+  newblue2 passes_original_legal_guard=True, candidate_legal=True
+  adaptec4 passes_original_legal_guard=True, candidate_legal=True
+newblue2:
+  NthuRoute internal time: 9.82818 70.2444
+  v8 adaptive low-tail exit: overflow=651 limit=768 iter=8 max_iter=16
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 4697434 + 4121133 = 8818567
+  low-tail global phase after exit: total_overflow=97, max_overflow=5,
+    proposal_ms=4421.075, commit_ms=3508.335
+  mode-2 self-ripup first phase: inputs=328, proposed=67, committed=36,
+    total_overflow=9, elapsed_ms=340.216
+  second post iteration cleared residual 2 -> 0 with mode-2 self-ripup
+adaptec4:
+  NthuRoute internal time: 15.1899 242.306
+  v8 adaptive low-tail exit: overflow=613 limit=768 iter=38 max_iter=48
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 9006227 + 4575546 = 13581773
+  low-tail global phase after exit: total_overflow=99, max_overflow=4,
+    proposal_ms=2477.199, commit_ms=6784.971
+  mode-2 self-ripup first phase: inputs=874, proposed=78, committed=19,
+    total_overflow=34, elapsed_ms=542.639
+  additional post iterations reduced 34 -> 0; final clear happened in
+    post iteration 5
+utilization samples:
+  adaptec4 early ps sample: NthuRoute about 301% CPU
+  adaptec4 mid-run ps sample: NthuRoute about 685% CPU
+aggregate:
+  legal=2/2
+  candidate_seconds=321.577212
+  original_seconds=207.182714
+  suite_speedup=0.644x
+  speedup versus v8.66 smoke seconds=0.999x
+```
+
+Classification:
+
+- Legal and successful as a correctness fix for v8.70. Mode 2 restores
+  proposal generation because it gives route search a snapshot with old paths
+  removed while keeping all congestion mutation outside the OpenMP region.
+- Rejected as the best overall config by a narrow margin. It improves
+  `newblue2` versus v8.66, but `adaptec4` needs extra post iterations because
+  mode-2 self-ripup is less aggressive than the original serial self-ripup on
+  that tail.
+- The useful direction is now clearer: preserve mode-2 proposal parallelism,
+  but improve residual tail clearing so hard cases do not pay back the saved
+  self-ripup time as extra post iterations.
