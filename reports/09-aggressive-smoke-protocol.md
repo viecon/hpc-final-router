@@ -4828,3 +4828,76 @@ Implementation idea:
   commits keep changing paths without clearing the same residual conflict.
 - This is still not testcase-specific: the gate depends only on observed
   routing-state churn in the current self-ripup round.
+
+v8.76 result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_5750c61_smoke_easyhard_direct8192_minscore2_exit768_tailselfproposal4_burst8max1limit4_v8_76_openmp14t
+commit=5750c61
+started_utc=2026-06-08T03:30:15Z
+runner_pid=2914980
+runner_pgid=2914980
+router_threads=14
+router_openmp=ON
+router_cuda=OFF
+VM CPU=16 vCPU Intel Xeon Processor (Skylake, IBRS), 2 sockets x 8 cores
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.76 | `newblue2` | 72.907982 | 76.516170 | 1.049x | 8820991 | 1.161x | 0 / 0 | legal; fastest easy row in the self-ripup proposal family |
+| v8.76 | `adaptec4` | 302.003291 | 130.666544 | 0.433x | 13582229 | 1.113x | 2 / 2 | illegal; fails original-legal guard |
+
+Evidence:
+
+```text
+summary_with_baseline.csv:
+  newblue2 speedup_vs_original=1.049490, wl_ratio_vs_original=1.161329,
+    candidate_legal=True, passes_original_legal_guard=True
+  adaptec4 speedup_vs_original=0.432666, wl_ratio_vs_original=1.112634,
+    candidate_legal=False, passes_original_legal_guard=False
+newblue2:
+  summary seconds=72.907982, WL=8820991, overflow=0, max=0
+  NthuRoute internal time: 9.88059 69.4442
+adaptec4:
+  summary seconds=302.003291, WL=13582229, overflow=2, max=2
+  adaptive low-tail exit: overflow=613 limit=768 iter=38
+  v8 emergency repair complete: overflow=1
+  2D sum/max overflow = 2 / 2
+  3D overflow/max = 2 / 2
+  total wire length = 9006584 + 4575645 = 13582229
+  NthuRoute internal time: 15.1401 296.379
+aggregate:
+  legal=1/2
+  original_legal_guard=1/2
+  timeouts=0
+  candidate_seconds=374.911273
+  original_seconds=207.182714
+  suite_speedup=0.552618x
+process handling:
+  background run used PID/PGID 2914980
+  no matching process remained after completion
+  VM diff against external/nthu-route-original and external/nthu-router-original
+    was empty
+```
+
+Classification:
+
+- Rejected. The per-round burst budget improves `newblue2` runtime compared
+  with v8.75, but it breaks `adaptec4` legality on a benchmark where the
+  original router has zero overflow.
+- The hard failure is not a timeout and not a runner issue. The log reaches
+  emergency repair, reports one remaining 2D overflow unit internally, then the
+  checker reports `2 / 2` final overflow. This means the mode-4 budget stops
+  some churn but also prevents enough legalizing movement to clear the last
+  tail conflict.
+- Current best remains v8.66 overall. Current best parallel self-ripup
+  evidence remains v8.71, because it is legal on both smoke rows even though it
+  is too slow on `adaptec4`.
+- The next aggressive direction should add a conflict-progress signal at commit
+  time, such as tracking whether a proposed self-ripup move removes demand from
+  the currently overflowed edge set or from the nets incident to those edges.
+  More tuning of only total/max/round burst budgets is now classified as a weak
+  direction.
