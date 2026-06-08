@@ -4180,3 +4180,61 @@ Classification:
   this slower than both v8.66 and v8.65 on `adaptec4`.
 - Current best remains v8.66: threshold 768, direct limit 8192, direct
   min_score 2, proposal parallel enabled.
+
+v8.68 threshold 768 with low-tail max candidates 1024:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_3dee229_smoke_easyhard_direct8192_minscore2_exit768_tailcand1024_v8_68_openmp14t
+commit=3dee229
+code base=same router code as d76619c; 3dee229 is report-only
+base config=v8.66
+V8_ADAPTIVE_LOW_TAIL_EXIT_LIMIT=768
+V8_LOW_TAIL_GLOBAL_REPAIR_MAX_CANDIDATES=1024
+V8_DIRECT_ROUTE_ALL_LIMIT=8192
+V8_DIRECT_ROUTE_ALL_MIN_SCORE=2
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.68 | `newblue2` | 76.028683 | 76.516170 | 1.006x | 8819671 | 1.161x | 0 / 0 | legal and slightly faster than original |
+| v8.68 | `adaptec4` | 246.484201 | 130.666544 | 0.530x | 13582485 | 1.113x | 0 / 0 | legal but slower than v8.66 |
+
+Evidence:
+
+```text
+newblue2:
+  NthuRoute internal time: 9.69216 72.5824
+  v8 adaptive low-tail exit: overflow=704 limit=768 iter=8 max_iter=16
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 4699403 + 4120268 = 8819671
+  low-tail global phase after exit: total_overflow=90, max_overflow=4,
+    proposal_ms=4519.882, commit_ms=3827.376
+  self-ripup then cleared 90 -> 0, elapsed_ms=2009.394
+adaptec4:
+  NthuRoute internal time: 15.0029 240.841
+  v8 adaptive low-tail exit: overflow=613 limit=768 iter=38 max_iter=48
+  3D # of overflow = 0
+  3D max overflow = 0
+  total wire length = 9006755 + 4575730 = 13582485
+  low-tail global phase after exit: total_overflow=99, max_overflow=4,
+    proposal_ms=2736.127, commit_ms=7729.172
+  self-ripup then cleared 99 -> 0, elapsed_ms=4253.751
+aggregate:
+  legal=2/2
+  candidate_seconds=322.512884
+  original_seconds=207.182714
+  suite_speedup=0.642x
+  speedup versus v8.66 smoke seconds=0.996x
+```
+
+Classification:
+
+- Rejected as a best config. It is legal and improves `newblue2`, but loses
+  more time on `adaptec4` than it gains on the easy row.
+- Lowering low-tail global candidates to 1024 does not simply reduce runtime:
+  hard commit time increases relative to v8.66, likely because the smaller
+  candidate pool leaves a harder residual for commit/self-ripup.
+- Current best remains v8.66.
