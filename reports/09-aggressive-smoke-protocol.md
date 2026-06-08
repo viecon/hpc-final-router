@@ -4310,3 +4310,38 @@ Classification:
   should target commit batching or conflict-separated low-tail self-ripup
   rather than only changing candidate counts.
 - Current best remains v8.66.
+
+v8.70 planned low-tail proposal-only self-ripup:
+
+```text
+branch=experiment-v8-aggressive-parallel
+base=v8.66 best config unless noted
+new code flag=NTHU_V8_LOW_TAIL_SELF_RIPUP_PROPOSAL
+runner env=V8_LOW_TAIL_SELF_RIPUP_PROPOSAL
+```
+
+Implementation intent:
+
+- Keep the NTHU-style rip-up/reroute flow and the existing v8 low-tail global
+  repair handoff.
+- Replace the low-tail self-ripup inner loop only when the new flag is set:
+  generate reroute proposals on a read-only congestion snapshot, then commit
+  them in deterministic sorted order.
+- The parallel region does not remove or insert paths, so it is thread-safe.
+  All congestion mutation stays in the commit loop.
+- The commit test uses the union of old-path and proposed-path affected edges
+  to compute an exact overflow-total delta, avoiding a full-grid
+  `current_overflow_stats()` scan per proposal.
+- This follows the same broad direction as collision-aware/task-based global
+  routing and SPRoute-style proposal/commit experiments already documented in
+  the literature notes: parallel route search, deterministic serialized commit,
+  and rollback on non-improving proposals.
+
+Smoke gate:
+
+- Easy: `newblue2.fastplace90.3d.50.20.100`, original 76.516170s, kill at
+  230s.
+- Hard: `adaptec4.aplace60.3d.30.50.90`, original 130.666544s, kill at 392s.
+- Must pass original-legal guard on both rows. If easy fails legality or
+  exceeds the 3x gate, kill the process group and classify before trying a new
+  idea.
