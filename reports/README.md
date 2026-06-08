@@ -13,7 +13,8 @@ and `reports/`; experiment code was not merged into `main`.
 | 2 | [branch-snapshots/README.md](branch-snapshots/README.md) | Source branch and commit table. |
 | 3 | [branch-snapshots/vm-fastest-benchmark-guard/reports/01-final-router-optimization-zh.md](branch-snapshots/vm-fastest-benchmark-guard/reports/01-final-router-optimization-zh.md) | Main final-router optimization report draft. |
 | 4 | [branch-snapshots/vm-fastest-benchmark-guard/reports/02-methods-by-commit-and-result.md](branch-snapshots/vm-fastest-benchmark-guard/reports/02-methods-by-commit-and-result.md) | Optimization method timeline and result summary. |
-| 5 | [branch-snapshots/experiment-proposal-reroute-v7/reports/09-aggressive-smoke-protocol.md](branch-snapshots/experiment-proposal-reroute-v7/reports/09-aggressive-smoke-protocol.md) | Latest aggressive proposal-reroute experiments and rejected/global-gate notes. |
+| 5 | [branch-snapshots/experiment-v8-aggressive-parallel/reports/09-aggressive-smoke-protocol.md](branch-snapshots/experiment-v8-aggressive-parallel/reports/09-aggressive-smoke-protocol.md) | Latest v8 aggressive parallel/self-ripup experiments and rejected tail-repair notes. |
+| 6 | [branch-snapshots/experiment-proposal-reroute-v7/reports/09-aggressive-smoke-protocol.md](branch-snapshots/experiment-proposal-reroute-v7/reports/09-aggressive-smoke-protocol.md) | Earlier proposal-reroute experiments and rejected/global-gate notes. |
 
 ## Presentation Material
 
@@ -37,6 +38,7 @@ Start with:
 | Bounded-length reroute probe | [branch-snapshots/vm-fastest-benchmark-guard/reports/06-bounded-length-reroute-probe.md](branch-snapshots/vm-fastest-benchmark-guard/reports/06-bounded-length-reroute-probe.md) |
 | Transactional virtual-ripup technical comparison | [branch-snapshots/experiment-transactional-virtual-ripup/reports/08-transactional-reroute-technical-comparison.md](branch-snapshots/experiment-transactional-virtual-ripup/reports/08-transactional-reroute-technical-comparison.md) |
 | Scoring methodology | [branch-snapshots/experiment-two-stage-parallel-reroute/reports/07-scoring-methodology.md](branch-snapshots/experiment-two-stage-parallel-reroute/reports/07-scoring-methodology.md) |
+| Latest v8 aggressive parallel/self-ripup experiments | [branch-snapshots/experiment-v8-aggressive-parallel/reports/09-aggressive-smoke-protocol.md](branch-snapshots/experiment-v8-aggressive-parallel/reports/09-aggressive-smoke-protocol.md) |
 | Proposal-only v7 experiments | [branch-snapshots/experiment-proposal-reroute-v7/reports/09-aggressive-smoke-protocol.md](branch-snapshots/experiment-proposal-reroute-v7/reports/09-aggressive-smoke-protocol.md) |
 
 ## Snapshot Policy
