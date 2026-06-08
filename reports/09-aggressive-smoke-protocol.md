@@ -4804,3 +4804,27 @@ Classification:
 - Current best remains v8.66 overall; current best parallel self-ripup evidence
   remains v8.71. The next direction should not tune the same total/max bound
   further unless the commit gate also gets a real conflict-progress signal.
+
+v8.76 planned bounded self-ripup burst budget:
+
+```text
+base=v8.75 observation
+code target=external/nthu-route/src/router/Range_router.cpp
+runner target=scripts/run_vm_aggressive_guard.sh and scripts/run_vm_aggressive_smoke.sh
+V8_LOW_TAIL_SELF_RIPUP_PROPOSAL=4
+V8_LOW_TAIL_SELF_RIPUP_BURST_TOTAL=8
+V8_LOW_TAIL_SELF_RIPUP_BURST_MAX=1
+V8_LOW_TAIL_SELF_RIPUP_BURST_ROUND_LIMIT=4
+```
+
+Implementation idea:
+
+- Keep the v8 mode-3 parallel proposal and deterministic commit structure.
+- Mode 4 adds a per-round budget for bounded self-ripup burst commits. Once
+  `burst_committed` reaches `V8_LOW_TAIL_SELF_RIPUP_BURST_ROUND_LIMIT` in a
+  self-ripup round, later non-improving bounded moves are rejected.
+- The goal is to preserve the escape behavior needed by `newblue2`, while
+  preventing the hard-case pattern seen in v8.74/v8.75 where many bounded
+  commits keep changing paths without clearing the same residual conflict.
+- This is still not testcase-specific: the gate depends only on observed
+  routing-state churn in the current self-ripup round.
