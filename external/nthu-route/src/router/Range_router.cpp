@@ -371,6 +371,22 @@ int v8_low_tail_self_ripup_max_tests() {
     return std::max(1, std::atoi(value));
 }
 
+int v8_low_tail_self_ripup_burst_total() {
+    const char* value = std::getenv("NTHU_V8_LOW_TAIL_SELF_RIPUP_BURST_TOTAL");
+    if (value == nullptr || *value == '\0') {
+        return 0;
+    }
+    return std::max(0, std::atoi(value));
+}
+
+int v8_low_tail_self_ripup_burst_max() {
+    const char* value = std::getenv("NTHU_V8_LOW_TAIL_SELF_RIPUP_BURST_MAX");
+    if (value == nullptr || *value == '\0') {
+        return 0;
+    }
+    return std::max(0, std::atoi(value));
+}
+
 bool v8_low_tail_strict_capacity_enabled() {
     const char* value = std::getenv("NTHU_V8_LOW_TAIL_STRICT_CAPACITY");
     if (value == nullptr || *value == '\0') {
@@ -3530,13 +3546,21 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                     const bool strict_capacity_tail = v8_low_tail_strict_capacity_enabled();
                     const int proposal_self_ripup_mode = v8_low_tail_self_ripup_proposal_mode();
                     const bool proposal_self_ripup = proposal_self_ripup_mode > 0;
+                    const int self_burst_total = proposal_self_ripup_mode >= 3
+                            ? v8_low_tail_self_ripup_burst_total()
+                            : 0;
+                    const int self_burst_max = proposal_self_ripup_mode >= 3
+                            ? v8_low_tail_self_ripup_burst_max()
+                            : 0;
                     int self_total_inputs = 0;
                     int self_total_proposed = 0;
                     int self_total_committed = 0;
+                    int self_total_burst_committed = 0;
                     int self_total_rejected = 0;
                     double self_total_ms = 0.0;
 
                     for (int self_round = 1; self_round <= tail_rounds && tail_stats.total_overflow > 0; ++self_round) {
+                        const OverflowStats self_round_start_stats = tail_stats;
                         std::vector<ProposalInput> self_inputs;
                         self_inputs.reserve(twopin_list.size());
                         for (Two_pin_element_2d* two_pin : twopin_list) {
@@ -3562,6 +3586,7 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                         const auto self_start = ProfileClock::now();
                         int self_proposed = 0;
                         int self_committed = 0;
+                        int self_burst_committed = 0;
                         int self_rejected = 0;
                         if (proposal_self_ripup) {
                             std::vector<RerouteProposal> self_proposals(self_inputs.size());
@@ -3667,7 +3692,9 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                                         original_path, two_pin.net_id);
                                 bool inserted_proposal = false;
                                 bool accept = false;
+                                bool accepted_burst = false;
                                 OverflowStats affected_after;
+                                OverflowStats candidate_stats = tail_stats;
                                 if (strict_capacity_tail) {
                                     accept = congestion.check_path_no_overflow(
                                             proposal.path, two_pin.net_id, true);
@@ -3679,9 +3706,26 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                                     congestion.update_congestion_map_insert_two_pin_net(two_pin);
                                     inserted_proposal = true;
                                     affected_after = affected_overflow_stats(congestion, affected_edges);
+                                    candidate_stats.total_overflow = std::max(0,
+                                            tail_stats.total_overflow +
+                                            affected_after.total_overflow - affected_before);
+                                    candidate_stats.max_overflow = candidate_stats.total_overflow == 0
+                                            ? 0
+                                            : std::max(tail_stats.max_overflow,
+                                                    affected_after.max_overflow);
                                     if (!strict_capacity_tail) {
-                                        accept = affected_after.total_overflow < affected_before &&
+                                        const bool improves = affected_after.total_overflow < affected_before &&
                                                 affected_after.max_overflow <= tail_stats.max_overflow;
+                                        const bool bounded_escape = self_burst_total > 0 &&
+                                                self_round < tail_rounds &&
+                                                candidate_stats.total_overflow <=
+                                                        self_round_start_stats.total_overflow +
+                                                        self_burst_total &&
+                                                candidate_stats.max_overflow <=
+                                                        self_round_start_stats.max_overflow +
+                                                        self_burst_max;
+                                        accept = improves || (!improves && bounded_escape);
+                                        accepted_burst = !improves && bounded_escape;
                                     }
                                 }
 
@@ -3690,14 +3734,11 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                                         two_pin.done = construct_2d_tree.done_iter;
                                     }
                                     construct_2d_tree.NetDirtyBit[two_pin.net_id] = true;
-                                    tail_stats.total_overflow = std::max(0,
-                                            tail_stats.total_overflow +
-                                            affected_after.total_overflow - affected_before);
-                                    tail_stats.max_overflow = tail_stats.total_overflow == 0
-                                            ? 0
-                                            : std::max(tail_stats.max_overflow,
-                                                    affected_after.max_overflow);
+                                    tail_stats = candidate_stats;
                                     ++self_committed;
+                                    if (accepted_burst) {
+                                        ++self_burst_committed;
+                                    }
                                     if (tail_stats.total_overflow == 0) {
                                         break;
                                     }
@@ -3796,14 +3837,16 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                         self_total_inputs += static_cast<int>(self_inputs.size());
                         self_total_proposed += self_proposed;
                         self_total_committed += self_committed;
+                        self_total_burst_committed += self_burst_committed;
                         self_total_rejected += self_rejected;
                         self_total_ms += self_ms;
                         if (do_log) {
-                            log_sp->info("v8 low-tail self-ripup round={} inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box_inc={} strict_capacity={} proposal_only={} proposal_mode={} elapsed_ms={:.3f}",
+                            log_sp->info("v8 low-tail self-ripup round={} inputs={} proposed={} committed={} burst_committed={} rejected={} total_overflow={} max_overflow={} box_inc={} strict_capacity={} proposal_only={} proposal_mode={} burst_total={} burst_max={} elapsed_ms={:.3f}",
                                     self_round, self_inputs.size(), self_proposed, self_committed,
-                                    self_rejected, tail_stats.total_overflow, tail_stats.max_overflow,
+                                    self_burst_committed, self_rejected, tail_stats.total_overflow, tail_stats.max_overflow,
                                     self_ripup_box_inc, strict_capacity_tail ? 1 : 0,
                                     proposal_self_ripup ? 1 : 0, proposal_self_ripup_mode,
+                                    self_burst_total, self_burst_max,
                                     self_ms);
                         }
                         if (self_committed == 0) {
@@ -3811,11 +3854,12 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                         }
                     }
                     if (do_log) {
-                        log_sp->info("v8 low-tail self-ripup phase inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box_inc={} strict_capacity={} proposal_only={} proposal_mode={} elapsed_ms={:.3f}",
+                        log_sp->info("v8 low-tail self-ripup phase inputs={} proposed={} committed={} burst_committed={} rejected={} total_overflow={} max_overflow={} box_inc={} strict_capacity={} proposal_only={} proposal_mode={} burst_total={} burst_max={} elapsed_ms={:.3f}",
                                 self_total_inputs, self_total_proposed, self_total_committed,
-                                self_total_rejected, tail_stats.total_overflow, tail_stats.max_overflow,
+                                self_total_burst_committed, self_total_rejected, tail_stats.total_overflow, tail_stats.max_overflow,
                                 self_ripup_box_inc, strict_capacity_tail ? 1 : 0,
                                 proposal_self_ripup ? 1 : 0, proposal_self_ripup_mode,
+                                self_burst_total, self_burst_max,
                                 self_total_ms);
                     }
                 }

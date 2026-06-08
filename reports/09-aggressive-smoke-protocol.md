@@ -4609,3 +4609,41 @@ Classification:
 - Keep v8.71 as the best parallel self-ripup evidence point. The next useful
   aggressive direction should change the tail proposal/commit logic itself,
   not simply remove the burst allowance.
+
+v8.74 planned bounded self-ripup escape commit:
+
+```text
+base=dedd744 report state plus v8.71 runtime config
+code target=external/nthu-route/src/router/Range_router.cpp
+runner target=scripts/run_vm_aggressive_guard.sh and scripts/run_vm_aggressive_smoke.sh
+V8_LOW_TAIL_SELF_RIPUP_PROPOSAL=3
+V8_LOW_TAIL_SELF_RIPUP_BOX_INC=192
+V8_LOW_TAIL_SELF_RIPUP_BURST_TOTAL=64
+V8_LOW_TAIL_SELF_RIPUP_BURST_MAX=4
+```
+
+Implementation idea:
+
+- Keep NTHU-style rip-up/reroute and the v8 mode-2 batch snapshot shape:
+  selected overflowed two-pin paths are removed sequentially, route search runs
+  in parallel on that read-only snapshot, original paths are restored, then
+  proposals commit in deterministic order.
+- Mode 3 changes only the deterministic commit gate. A proposal that does not
+  immediately reduce affected-edge overflow may commit if the resulting
+  estimated global overflow stays within a small per-round bound:
+  `round_start_total + burst_total` and `round_start_max + burst_max`.
+- This is the self-ripup analogue of the bounded strict-repair escape that
+  v8.71 needed for legality. The goal is to let the parallel self-ripup phase
+  unlock tail conflicts earlier so hard cases do not pay for many later strict
+  repair/post iterations.
+- The env defaults remain zero, so previous modes are unchanged unless
+  `V8_LOW_TAIL_SELF_RIPUP_PROPOSAL=3` and nonzero burst bounds are set.
+
+Expected smoke gate:
+
+- Easy `newblue2` must stay legal and below 230s.
+- Hard `adaptec4` runs only if easy is legal; it must stay legal and below
+  392s.
+- If either row is slower than 3x original or illegal, kill the whole process
+  group and classify as either implementation bug or failed optimization
+  logic before trying the next idea.
