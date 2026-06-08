@@ -4541,3 +4541,71 @@ Classification:
   2D overflow that becomes illegal after layer assignment.
 - Current best remains v8.66. Current best parallel self-ripup variant remains
   v8.71, but it is not faster than v8.66 overall.
+
+v8.73 mode-2 self-ripup with strict repair burst disabled:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_0a9093b_smoke_easyhard_direct8192_minscore2_exit768_tailselfproposal2_noburst_v8_73_openmp14t
+commit=0a9093b
+base config=v8.71
+V8_LOW_TAIL_SELF_RIPUP_PROPOSAL=2
+V8_LOW_TAIL_SELF_RIPUP_BOX_INC=192
+V8_STRICT_LEGAL_REPAIR_SNAPSHOT_BURST_TOTAL=0
+V8_STRICT_LEGAL_REPAIR_SNAPSHOT_BURST_MAX=0
+started_utc=2026-06-08T02:54:40Z
+runner_pid=2903809
+runner_pgid=2903809
+```
+
+Purpose:
+
+- v8.71 was legal, but `adaptec4` paid extra post iterations after the strict
+  repair burst temporarily worsened the residual tail. This run tested whether
+  disabling that temporary-worsening burst would reduce time while preserving
+  legality.
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.73 | `newblue2` | 117.953202 | 76.516170 | 0.649x | 8821581 | 1.161x | 4 / 2 | illegal; hard killed after easy failed |
+
+Evidence:
+
+```text
+newblue2 summary:
+  total_wirelength=8821581
+  total_overflow=4
+  max_overflow=2
+  overflowed_nets=52
+  overflowed_edges=2
+newblue2 log:
+  NthuRoute internal time: 9.7161 114.533
+  v8 emergency repair complete: overflow=2
+  2D sum overflow = 4
+  2D max overflow = 2
+  3D # of overflow = 4
+  3D max overflow = 2
+  total wire length = 4703856 + 4117725 = 8821581
+tail behavior:
+  low-tail global repair repeatedly saw inputs=87, proposed=41, committed=0
+  mode-2 self-ripup repeatedly saw inputs=87, proposed=2, committed=0
+  strict legal repair with snapshot_burst_total=0 repeatedly proposed=0
+process handling:
+  easy failed original-legal guard
+  hard `adaptec4` had already started; the matching process group 2905252
+  was killed at 2026-06-08T02:58:33Z
+  no matching process remained after the group kill
+```
+
+Classification:
+
+- Rejected. It fails the original-legal guard on the easy smoke case, so the
+  hard row is intentionally incomplete.
+- Disabling strict repair burst is a logic failure for this family. The
+  residual tail needs a limited temporary-worsening move to escape the final
+  congested edge; without it, global repair and mode-2 self-ripup keep finding
+  candidates but deterministic commit rejects them all.
+- Keep v8.71 as the best parallel self-ripup evidence point. The next useful
+  aggressive direction should change the tail proposal/commit logic itself,
+  not simply remove the burst allowance.
