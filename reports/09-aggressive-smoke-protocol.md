@@ -4647,3 +4647,83 @@ Expected smoke gate:
 - If either row is slower than 3x original or illegal, kill the whole process
   group and classify as either implementation bug or failed optimization
   logic before trying the next idea.
+
+v8.74 result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_09be3fa_smoke_easyhard_direct8192_minscore2_exit768_tailselfproposal3_burst64_v8_74_openmp14t
+commit=09be3fa
+build=passed on VM via apptainer cmake, build-release-vm-openmp-ON
+started_utc=2026-06-08T03:06:47Z
+ended_utc=2026-06-08T03:14:03Z
+runner_pid=2906489
+runner_pgid=2906489
+VM=16 x Intel Xeon Processor (Skylake, IBRS), OpenMP threads=14
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.74 | `newblue2` | 77.276572 | 76.516170 | 0.990x | 8817400 | 1.161x | 0 / 0 | legal, slightly slower than original and v8.71 |
+| v8.74 | `adaptec4` | 253.394329 | 130.666544 | 0.516x | 13582192 | 1.113x | 0 / 0 | legal, slower than v8.71 hard |
+
+Evidence:
+
+```text
+build:
+  VM host cmake was unavailable, so build used the existing router.sif:
+    apptainer exec --nv router.sif cmake -S external/nthu-route \
+      -B external/nthu-route/build-release-vm-openmp-ON -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release -DNTHU_ROUTE_ENABLE_OPENMP=ON \
+      -DNTHU_ROUTE_ENABLE_CUDA=OFF
+    apptainer exec --nv router.sif cmake --build ... -j 14
+  build completed: Range_router.cpp.o and NthuRoute linked
+newblue2:
+  summary seconds=77.276572, WL=8817400, overflow=0, max=0
+  NthuRoute internal time: 9.83742 73.6019
+  adaptive low-tail exit: overflow=760 limit=768 iter=9
+  first mode-3 self phase: inputs=3297, proposed=163,
+    committed=153, burst_committed=122, total_overflow=54
+  final mode-3 self phase: inputs=32, proposed=2, committed=2,
+    burst_committed=0, total_overflow=0
+  2D sum/max overflow = 0 / 0
+  3D overflow/max = 0 / 0
+adaptec4:
+  summary seconds=253.394329, WL=13582192, overflow=0, max=0
+  NthuRoute internal time: 15.2453 247.755
+  adaptive low-tail exit: overflow=613 limit=768 iter=38
+  first mode-3 self phase: inputs=1680, proposed=140,
+    committed=131, burst_committed=108, total_overflow=26
+  later mode-3 self phases repeatedly committed mostly burst moves:
+    inputs=1094, committed=95, burst_committed=91, total_overflow=21
+    inputs=286, committed=31, burst_committed=25, total_overflow=2
+  final mode-3 self phase: inputs=64, proposed=2, committed=2,
+    burst_committed=0, total_overflow=0
+  2D sum/max overflow = 0 / 0
+  3D overflow/max = 0 / 0
+aggregate:
+  legal=2/2
+  candidate_seconds=330.670901
+  original_seconds=207.182714
+  suite_speedup=0.627x
+process handling:
+  background run used PID/PGID 2906489
+  no matching process remained after completion
+  VM diff against external/nthu-route-original and external/nthu-router-original
+    was empty
+```
+
+Classification:
+
+- Legal but rejected. It proves the bounded self-ripup escape can preserve
+  legality, but it is slower than v8.71 on both smoke rows.
+- This is an optimization-logic failure rather than a build or thread-safety
+  failure. The mode-3 gate accepts too many non-improving burst moves; hard
+  `adaptec4` then spends extra time cycling through tail self-ripup and strict
+  repair before reaching zero overflow.
+- Keep v8.71 as the best parallel self-ripup evidence point. A useful next
+  attempt would need a stricter progress gate, such as accepting bounded burst
+  moves only when they reduce the number of overflowed nets/edges or when they
+  break a known conflicting edge group, instead of accepting any bounded
+  total/max overflow state.
