@@ -347,12 +347,16 @@ bool v8_low_tail_self_ripup_enabled() {
     return std::getenv("NTHU_V8_LOW_TAIL_SELF_RIPUP") != nullptr;
 }
 
-bool v8_low_tail_self_ripup_proposal_enabled() {
+int v8_low_tail_self_ripup_proposal_mode() {
     const char* value = std::getenv("NTHU_V8_LOW_TAIL_SELF_RIPUP_PROPOSAL");
     if (value == nullptr || *value == '\0') {
-        return false;
+        return 0;
     }
-    return std::atoi(value) != 0;
+    return std::max(0, std::atoi(value));
+}
+
+bool v8_low_tail_self_ripup_proposal_enabled() {
+    return v8_low_tail_self_ripup_proposal_mode() > 0;
 }
 
 int v8_low_tail_self_ripup_box_inc() {
@@ -3528,7 +3532,8 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                     const int self_ripup_box_inc = v8_low_tail_self_ripup_box_inc();
                     const int self_ripup_max_tests = v8_low_tail_self_ripup_max_tests();
                     const bool strict_capacity_tail = v8_low_tail_strict_capacity_enabled();
-                    const bool proposal_self_ripup = v8_low_tail_self_ripup_proposal_enabled();
+                    const int proposal_self_ripup_mode = v8_low_tail_self_ripup_proposal_mode();
+                    const bool proposal_self_ripup = proposal_self_ripup_mode > 0;
                     int self_total_inputs = 0;
                     int self_total_proposed = 0;
                     int self_total_committed = 0;
@@ -3564,6 +3569,24 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                         int self_rejected = 0;
                         if (proposal_self_ripup) {
                             std::vector<RerouteProposal> self_proposals(self_inputs.size());
+                            const bool batch_remove_snapshot = proposal_self_ripup_mode >= 2;
+                            std::vector<StrictRepairState> self_states(self_inputs.size());
+                            std::vector<char> self_removed(self_inputs.size(), 0);
+                            if (batch_remove_snapshot) {
+                                for (int i = 0; i < static_cast<int>(self_inputs.size()); ++i) {
+                                    Two_pin_element_2d& two_pin = *self_inputs[i].two_pin;
+                                    if (congestion.check_path_no_overflow(
+                                                two_pin.path, two_pin.net_id, false)) {
+                                        continue;
+                                    }
+                                    self_states[i].original_path = two_pin.path;
+                                    self_states[i].original_pin1 = two_pin.pin1;
+                                    self_states[i].original_pin2 = two_pin.pin2;
+                                    congestion.update_congestion_map_remove_two_pin_net(
+                                            self_states[i].original_path, two_pin.net_id);
+                                    self_removed[i] = 1;
+                                }
+                            }
                             const int original_boxsize_inc = construct_2d_tree.BOXSIZE_INC;
                             if (self_ripup_box_inc > original_boxsize_inc) {
                                 construct_2d_tree.BOXSIZE_INC = self_ripup_box_inc;
@@ -3578,11 +3601,14 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
 #pragma omp for schedule(dynamic, 1)
                                     for (int i = 0; i < static_cast<int>(self_inputs.size()); ++i) {
                                         self_proposals[i].two_pin = self_inputs[i].two_pin;
+                                        if (batch_remove_snapshot && !self_removed[i]) {
+                                            continue;
+                                        }
                                         self_proposals[i].proposed = propose_reroute_path(
                                                 *self_inputs[i].two_pin, version,
                                                 local_monotonic, allow_maze ? &local_maze : nullptr,
-                                                allow_maze, self_proposals[i].path, false,
-                                                self_inputs[i].overflow_score);
+                                                allow_maze, self_proposals[i].path,
+                                                batch_remove_snapshot, self_inputs[i].overflow_score);
                                     }
                                 }
                             } else
@@ -3593,14 +3619,29 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                                 local_maze.set_rebuild_tree_from_twopins(true);
                                 for (int i = 0; i < static_cast<int>(self_inputs.size()); ++i) {
                                     self_proposals[i].two_pin = self_inputs[i].two_pin;
+                                    if (batch_remove_snapshot && !self_removed[i]) {
+                                        continue;
+                                    }
                                     self_proposals[i].proposed = propose_reroute_path(
                                             *self_inputs[i].two_pin, version,
                                             local_monotonic, allow_maze ? &local_maze : nullptr,
-                                            allow_maze, self_proposals[i].path, false,
-                                            self_inputs[i].overflow_score);
+                                            allow_maze, self_proposals[i].path,
+                                            batch_remove_snapshot, self_inputs[i].overflow_score);
                                 }
                             }
                             construct_2d_tree.BOXSIZE_INC = original_boxsize_inc;
+                            if (batch_remove_snapshot) {
+                                for (int i = 0; i < static_cast<int>(self_inputs.size()); ++i) {
+                                    if (!self_removed[i]) {
+                                        continue;
+                                    }
+                                    Two_pin_element_2d& two_pin = *self_inputs[i].two_pin;
+                                    two_pin.path = self_states[i].original_path;
+                                    two_pin.pin1 = self_states[i].original_pin1;
+                                    two_pin.pin2 = self_states[i].original_pin2;
+                                    congestion.update_congestion_map_insert_two_pin_net(two_pin);
+                                }
+                            }
 
                             for (RerouteProposal& proposal : self_proposals) {
                                 if (!proposal.proposed || proposal.path.size() < 2) {
@@ -3762,22 +3803,24 @@ void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*
                         self_total_rejected += self_rejected;
                         self_total_ms += self_ms;
                         if (do_log) {
-                            log_sp->info("v8 low-tail self-ripup round={} inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box_inc={} strict_capacity={} proposal_only={} elapsed_ms={:.3f}",
+                            log_sp->info("v8 low-tail self-ripup round={} inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box_inc={} strict_capacity={} proposal_only={} proposal_mode={} elapsed_ms={:.3f}",
                                     self_round, self_inputs.size(), self_proposed, self_committed,
                                     self_rejected, tail_stats.total_overflow, tail_stats.max_overflow,
                                     self_ripup_box_inc, strict_capacity_tail ? 1 : 0,
-                                    proposal_self_ripup ? 1 : 0, self_ms);
+                                    proposal_self_ripup ? 1 : 0, proposal_self_ripup_mode,
+                                    self_ms);
                         }
                         if (self_committed == 0) {
                             break;
                         }
                     }
                     if (do_log) {
-                        log_sp->info("v8 low-tail self-ripup phase inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box_inc={} strict_capacity={} proposal_only={} elapsed_ms={:.3f}",
+                        log_sp->info("v8 low-tail self-ripup phase inputs={} proposed={} committed={} rejected={} total_overflow={} max_overflow={} box_inc={} strict_capacity={} proposal_only={} proposal_mode={} elapsed_ms={:.3f}",
                                 self_total_inputs, self_total_proposed, self_total_committed,
                                 self_total_rejected, tail_stats.total_overflow, tail_stats.max_overflow,
                                 self_ripup_box_inc, strict_capacity_tail ? 1 : 0,
-                                proposal_self_ripup ? 1 : 0, self_total_ms);
+                                proposal_self_ripup ? 1 : 0, proposal_self_ripup_mode,
+                                self_total_ms);
                     }
                 }
             }

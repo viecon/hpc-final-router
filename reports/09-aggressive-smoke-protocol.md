@@ -4345,3 +4345,73 @@ Smoke gate:
 - Must pass original-legal guard on both rows. If easy fails legality or
   exceeds the 3x gate, kill the process group and classify before trying a new
   idea.
+
+v8.70 result:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_c7be698_smoke_easyhard_direct8192_minscore2_exit768_tailselfproposal_v8_70_openmp14t
+commit=c7be698
+base config=v8.66
+V8_LOW_TAIL_SELF_RIPUP_PROPOSAL=1
+build=passed on VM, build-release-vm-openmp-ON
+```
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.70 | `newblue2` | 106.841894 | 76.516170 | 0.716x | 8812729 | 1.160x | 6 / 2 | illegal; hard was killed/skipped |
+
+Evidence:
+
+```text
+newblue2:
+  NthuRoute internal time: 9.68112 103.372
+  v8 low-tail global repair repeated with inputs=88 but proposed=0
+  v8 low-tail self-ripup proposal-only repeated with inputs=88 but proposed=0
+  final 2D sum overflow = 6
+  final 2D max overflow = 4
+  final 3D # of overflow = 6
+  final 3D max overflow = 2
+  manual VM verifier:
+    total_wirelength=8812729
+    total_overflow=6
+    max_overflow=2
+    overflowed_nets=78
+    overflowed_edges=3
+process handling:
+  easy failed original-legal guard
+  runner process group was killed before hard
+  child timeout/evaluator process group was also checked and cleared
+```
+
+Classification:
+
+- Rejected. It violates the original-legal guard on `newblue2`, so no hard
+  row was run.
+- Root cause from log: proposal-only self-ripup used the current congestion
+  without removing the old path. For the final 88 overflowed inputs,
+  `propose_reroute_path()` produced zero candidates, so the final overflow
+  stayed at 3 in 2D and became 6 after layer assignment.
+- This is an implementation issue, not a proof that proposal/commit is
+  unusable. The next patch keeps the thread-safe proposal/commit shape but
+  changes the proposal snapshot so old paths are removed before parallel route
+  search.
+
+v8.71 planned batch-remove snapshot self-ripup:
+
+```text
+base=v8.70 code and v8.66 runtime config
+V8_LOW_TAIL_SELF_RIPUP_PROPOSAL=2
+```
+
+Implementation delta versus v8.70:
+
+- Mode 1 is the failed read-only current-congestion proposal path.
+- Mode 2 first removes the selected self-ripup old paths sequentially to form
+  a deterministic batch snapshot, runs parallel proposal search with
+  `old_path_removed=true`, restores all original paths, then commits proposals
+  in sorted order with the affected-edge overflow-delta check.
+- This keeps all congestion mutation outside the OpenMP region while giving
+  the proposal search the same "old path removed" condition that the serial
+  self-ripup path relied on.
