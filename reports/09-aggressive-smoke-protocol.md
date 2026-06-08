@@ -4727,3 +4727,80 @@ Classification:
   moves only when they reduce the number of overflowed nets/edges or when they
   break a known conflicting edge group, instead of accepting any bounded
   total/max overflow state.
+
+v8.75 narrower bounded self-ripup escape:
+
+```text
+/home/ubuntu/hpc-final-router/results/vm_aggressive_guard/frontier_v8_direct_proposal_9e6d702_smoke_easyhard_direct8192_minscore2_exit768_tailselfproposal3_burst8max1_v8_75_openmp14t
+commit=9e6d702
+base=v8.74 code, env-only change
+V8_LOW_TAIL_SELF_RIPUP_PROPOSAL=3
+V8_LOW_TAIL_SELF_RIPUP_BURST_TOTAL=8
+V8_LOW_TAIL_SELF_RIPUP_BURST_MAX=1
+started_utc=2026-06-08T03:17:39Z
+runner_pid=2910766
+runner_pgid=2910766
+```
+
+Purpose:
+
+- v8.74 showed that a wide `64/4` self-ripup burst is legal but causes tail
+  churn. This run kept the same code and narrowed the self-ripup burst bound
+  to `8/1` to test whether legality could be preserved with fewer
+  non-improving moves.
+
+Result:
+
+| Version | Benchmark | Seconds | Original seconds | Speedup | WL | WL ratio | Overflow | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| v8.75 | `newblue2` | 74.055003 | 76.516170 | 1.033x | 8817086 | 1.161x | 0 / 0 | legal, close to v8.71 easy |
+| v8.75 | `adaptec4` | 258.322951 | 130.666544 | 0.506x | 13582192 | 1.113x | 0 / 0 | legal, slower than v8.74 and v8.71 hard |
+
+Evidence:
+
+```text
+newblue2:
+  summary seconds=74.055003, WL=8817086, overflow=0, max=0
+  NthuRoute internal time: 9.7319 70.5686
+  first mode-3 self phase: inputs=4055, proposed=174,
+    committed=162, burst_committed=131, total_overflow=61
+  final mode-3 self phase: inputs=31, proposed=1, committed=1,
+    burst_committed=0, total_overflow=0
+  2D sum/max overflow = 0 / 0
+  3D overflow/max = 0 / 0
+adaptec4:
+  summary seconds=258.322951, WL=13582192, overflow=0, max=0
+  NthuRoute internal time: 15.115 252.402
+  adaptive low-tail exit: overflow=613 limit=768 iter=38
+  first mode-3 self phase: inputs=1680, proposed=140,
+    committed=130, burst_committed=107, total_overflow=26
+  later mode-3 self phases still churned:
+    inputs=1118, committed=92, burst_committed=89, total_overflow=21
+    inputs=286, committed=31, burst_committed=25, total_overflow=2
+  final mode-3 self phase: inputs=64, proposed=2, committed=2,
+    burst_committed=0, total_overflow=0
+  2D sum/max overflow = 0 / 0
+  3D overflow/max = 0 / 0
+aggregate:
+  legal=2/2
+  candidate_seconds=332.377954
+  original_seconds=207.182714
+  suite_speedup=0.623x
+process handling:
+  background run used PID/PGID 2910766
+  no matching process remained after completion
+  VM diff against external/nthu-route-original and external/nthu-router-original
+    was empty
+```
+
+Classification:
+
+- Legal but rejected. Narrowing the self-ripup burst improved `newblue2`
+  compared with v8.74, but it did not improve the hard case.
+- The hard-case failure mode is now consistent across v8.74 and v8.75:
+  deterministic self-ripup keeps accepting bounded moves that do not clear the
+  same tail conflict quickly enough, then strict repair and later low-tail
+  passes pay the cost.
+- Current best remains v8.66 overall; current best parallel self-ripup evidence
+  remains v8.71. The next direction should not tune the same total/max bound
+  further unless the commit gate also gets a real conflict-progress signal.
