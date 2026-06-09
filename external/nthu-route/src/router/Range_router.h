@@ -28,6 +28,7 @@ constexpr int EXPAND_RANGE_SIZE = 10;
 constexpr int EXPAND_RANGE_INC = 1;
 
 class Congestion;
+class Multisource_multisink_mazeroute;
 
 class Point_fc;
 struct Construct_2d_tree;
@@ -76,6 +77,7 @@ public:
     Congestion& congestion;
     boost::multi_array<ColorMap, 2> colorMap;
     MonotonicRouting monotonicRouter;
+    bool monotonic_enable_flag;
     std::unordered_map<const Two_pin_element_2d*, CudaDoglegChoice> cuda_dogleg_choices;
 
     std::shared_ptr<spdlog::logger> log_sp;
@@ -94,6 +96,9 @@ public:
     void expand_range(Coordinate_2d c1, Coordinate_2d c2, int interval_index);
 
     void range_router(Two_pin_element_2d& two_pin, int version);
+    bool range_router(Two_pin_element_2d& two_pin, int version, MonotonicRouting* local_monotonic,
+            Multisource_multisink_mazeroute* local_maze, bool allow_maze);
+    void route_twopin_candidates(std::vector<Two_pin_element_2d*>& twopin_list, int version);
     bool try_l_shape_fastpath(Two_pin_element_2d& two_pin);
     bool try_dogleg_fastpath(Two_pin_element_2d& two_pin);
     bool try_cuda_dogleg_choice(Two_pin_element_2d& two_pin);

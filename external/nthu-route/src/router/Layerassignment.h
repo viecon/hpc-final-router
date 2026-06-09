@@ -176,6 +176,8 @@ struct Layer_assignment {
 
     void sort_net_order();
     void fast_greedy_layer_assignment();
+    void fast_net_guided_layer_assignment();
+    void repair_layer_overflow();
 
     Layer_assignment(const Congestion& congestion, OutputGeneration& output);
 

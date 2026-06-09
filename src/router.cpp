@@ -37,6 +37,11 @@ struct SearchNodeGreater {
   }
 };
 
+enum class SearchCapacityMode {
+  Strict,
+  Congested,
+};
+
 int h_edges(const Grid &grid) { return grid.height * std::max(0, grid.width - 1); }
 int v_edges(const Grid &grid) { return std::max(0, grid.height - 1) * grid.width; }
 int node_index(const Grid &grid, int x, int y) { return y * grid.width + x; }
@@ -85,6 +90,12 @@ void add_path(Demand &demand, const Path &path, int delta) {
 
 long long path_wirelength(const Path &path) {
   return static_cast<long long>(path.edges.size());
+}
+
+Path unrouted_path() {
+  Path path;
+  path.routed = false;
+  return path;
 }
 
 Path fallback_manhattan(const Grid &grid, const Net &net) {
@@ -248,18 +259,28 @@ double edge_cost(const Grid &grid, const Demand &demand, const Demand &marks,
          config.mark_weight * std::sqrt(static_cast<double>(mark));
 }
 
-Path route_one_astar(const Grid &grid, const Net &net, const Demand &demand,
-                     const Demand &marks, const RouterConfig &config,
-                     int iteration) {
+bool edge_is_legal_after_add(const Grid &grid, const Demand &demand, Edge edge) {
+  const int cap = edge_capacity(grid, edge);
+  return cap > 0 && edge_demand(demand, edge) < cap;
+}
+
+Path route_one_astar_search(const Grid &grid, const Net &net, const Demand &demand,
+                            const Demand &marks, const RouterConfig &config,
+                            int iteration, SearchCapacityMode capacity_mode,
+                            bool whole_grid) {
   const int base_len = std::max(1, manhattan(net.source, net.target));
   const double scale = 1.0 + config.relax_beta +
                        0.25 * std::atan(static_cast<double>(iteration) - config.relax_alpha);
   const int bound = std::max(base_len, static_cast<int>(std::ceil(base_len * scale)));
   const int margin = std::max(2, (bound - base_len) / 2 + 2);
-  const int xmin = std::max(0, std::min(net.source.x, net.target.x) - margin);
-  const int xmax = std::min(grid.width - 1, std::max(net.source.x, net.target.x) + margin);
-  const int ymin = std::max(0, std::min(net.source.y, net.target.y) - margin);
-  const int ymax = std::min(grid.height - 1, std::max(net.source.y, net.target.y) + margin);
+  const int xmin = whole_grid ? 0 : std::max(0, std::min(net.source.x, net.target.x) - margin);
+  const int xmax = whole_grid ? grid.width - 1
+                              : std::min(grid.width - 1,
+                                         std::max(net.source.x, net.target.x) + margin);
+  const int ymin = whole_grid ? 0 : std::max(0, std::min(net.source.y, net.target.y) - margin);
+  const int ymax = whole_grid ? grid.height - 1
+                              : std::min(grid.height - 1,
+                                         std::max(net.source.y, net.target.y) + margin);
 
   const int n_nodes = grid.width * grid.height;
   std::vector<double> best(n_nodes, std::numeric_limits<double>::infinity());
@@ -290,7 +311,7 @@ Path route_one_astar(const Grid &grid, const Net &net, const Demand &demand,
         path.points.push_back(p);
         const Point pp = parent[node_index(grid, p.x, p.y)];
         if (pp.x < 0) {
-          return fallback_manhattan(grid, net);
+          return unrouted_path();
         }
         path.edges.push_back(edge_between(grid, pp, p));
         p = pp;
@@ -308,10 +329,14 @@ Path route_one_astar(const Grid &grid, const Net &net, const Demand &demand,
         continue;
       }
       const int nlen = cur.length + 1;
-      if (nlen + manhattan(Point{nx, ny}, net.target) > bound) {
+      if (!whole_grid && nlen + manhattan(Point{nx, ny}, net.target) > bound) {
         continue;
       }
       const Edge edge = edge_between(grid, Point{cur.x, cur.y}, Point{nx, ny});
+      if (capacity_mode == SearchCapacityMode::Strict &&
+          !edge_is_legal_after_add(grid, demand, edge)) {
+        continue;
+      }
       const double ncost = cur.cost + edge_cost(grid, demand, marks, edge, config);
       const int nidx = node_index(grid, nx, ny);
       if (ncost + 1e-9 < best[nidx]) {
@@ -322,11 +347,87 @@ Path route_one_astar(const Grid &grid, const Net &net, const Demand &demand,
       }
     }
   }
+  return unrouted_path();
+}
+
+Path route_one_astar(const Grid &grid, const Net &net, const Demand &demand,
+                     const Demand &marks, const RouterConfig &config,
+                     int iteration) {
+  Path path = route_one_astar_search(grid, net, demand, marks, config, iteration,
+                                     SearchCapacityMode::Congested, false);
+  if (path.routed) {
+    return path;
+  }
+
+  path = route_one_astar_search(grid, net, demand, marks, config, iteration,
+                                SearchCapacityMode::Strict, false);
+  if (path.routed) {
+    return path;
+  }
+
+  path = route_one_astar_search(grid, net, demand, marks, config, iteration,
+                                SearchCapacityMode::Strict, true);
+  if (path.routed) {
+    return path;
+  }
+
+  path = route_one_astar_search(grid, net, demand, marks, config, iteration,
+                                SearchCapacityMode::Congested, true);
+  if (path.routed) {
+    return path;
+  }
+
   return fallback_manhattan(grid, net);
+}
+
+Path route_one_astar_strict(const Grid &grid, const Net &net, const Demand &demand,
+                            const Demand &marks, const RouterConfig &config,
+                            int iteration) {
+  Path path = route_one_astar_search(grid, net, demand, marks, config, iteration,
+                                     SearchCapacityMode::Strict, false);
+  if (path.routed) {
+    return path;
+  }
+  return route_one_astar_search(grid, net, demand, marks, config, iteration,
+                                SearchCapacityMode::Strict, true);
 }
 
 Demand empty_demand(const Grid &grid) {
   return Demand{std::vector<int>(h_edges(grid), 0), std::vector<int>(v_edges(grid), 0)};
+}
+
+Demand build_demand(const Grid &grid, const std::vector<Path> &paths) {
+  Demand demand = empty_demand(grid);
+  for (const auto &path : paths) {
+    if (path.routed) {
+      add_path(demand, path, +1);
+    }
+  }
+  return demand;
+}
+
+long long total_overflow(const Grid &grid, const Demand &demand) {
+  long long overflow = 0;
+  auto scan = [&](const std::vector<int> &dem, const std::vector<int> &cap) {
+    for (std::size_t i = 0; i < dem.size(); ++i) {
+      overflow += std::max(0, dem[i] - cap[i]);
+    }
+  };
+  scan(demand.h, grid.h_capacity);
+  scan(demand.v, grid.v_capacity);
+  return overflow;
+}
+
+long long path_overflow_score(const Grid &grid, const Demand &demand, const Path &path) {
+  if (!path.routed) {
+    return std::numeric_limits<long long>::max();
+  }
+
+  long long score = 0;
+  for (const auto &edge : path.edges) {
+    score += std::max(0, edge_demand(demand, edge) - edge_capacity(grid, edge));
+  }
+  return score;
 }
 
 std::vector<int> overflow_nets(const Grid &grid, const Demand &demand,
@@ -345,6 +446,60 @@ std::vector<int> overflow_nets(const Grid &grid, const Demand &demand,
     }
   }
   return selected;
+}
+
+int legalize_paths(const Benchmark &benchmark, const RouterConfig &config,
+                   std::vector<Path> &paths, Demand &demand,
+                   int completed_iterations) {
+  const auto &grid = benchmark.grid;
+  const int max_iterations = completed_iterations + std::max(1, config.iterations);
+
+  while (completed_iterations < max_iterations && total_overflow(grid, demand) > 0) {
+    const long long before_overflow = total_overflow(grid, demand);
+    std::vector<int> tasks = overflow_nets(grid, demand, paths);
+    if (tasks.empty()) {
+      break;
+    }
+
+    std::sort(tasks.begin(), tasks.end(), [&](int a, int b) {
+      const long long a_overflow = path_overflow_score(grid, demand, paths[a]);
+      const long long b_overflow = path_overflow_score(grid, demand, paths[b]);
+      if (a_overflow != b_overflow) {
+        return a_overflow > b_overflow;
+      }
+      return manhattan(benchmark.nets[a].source, benchmark.nets[a].target) >
+             manhattan(benchmark.nets[b].source, benchmark.nets[b].target);
+    });
+
+    Demand marks = empty_demand(grid);
+    for (const int idx : tasks) {
+      if (paths[idx].routed) {
+        add_path(marks, paths[idx], +1);
+      }
+    }
+
+    for (const int idx : tasks) {
+      Path old_path = std::move(paths[idx]);
+      if (old_path.routed) {
+        add_path(demand, old_path, -1);
+      }
+      paths[idx] = route_one_astar_strict(grid, benchmark.nets[idx], demand, marks, config,
+                                          completed_iterations);
+      if (!paths[idx].routed) {
+        paths[idx] = std::move(old_path);
+      }
+      if (paths[idx].routed) {
+        add_path(demand, paths[idx], +1);
+      }
+    }
+
+    ++completed_iterations;
+    if (total_overflow(grid, demand) >= before_overflow) {
+      break;
+    }
+  }
+
+  return completed_iterations;
 }
 
 Metrics collect_metrics(const std::string &mode, const Benchmark &benchmark,
@@ -379,6 +534,23 @@ Metrics collect_metrics(const std::string &mode, const Benchmark &benchmark,
 }
 
 } // namespace
+
+namespace detail {
+
+Metrics legalize_and_collect_metrics(const std::string &mode, const Benchmark &benchmark,
+                                     const RouterConfig &config, std::vector<Path> &paths,
+                                     int completed_iterations,
+                                     double elapsed_before_legalization_ms) {
+  const auto start = std::chrono::steady_clock::now();
+  Demand demand = build_demand(benchmark.grid, paths);
+  completed_iterations = legalize_paths(benchmark, config, paths, demand, completed_iterations);
+  const auto end = std::chrono::steady_clock::now();
+  const double ms = elapsed_before_legalization_ms +
+                    std::chrono::duration<double, std::milli>(end - start).count();
+  return collect_metrics(mode, benchmark, config, paths, demand, ms, completed_iterations);
+}
+
+} // namespace detail
 
 Benchmark generate_benchmark(int width, int height, int nets, int capacity,
                              double obstacle_density, uint64_t seed) {
@@ -433,16 +605,6 @@ Metrics route_sequential(const Benchmark &benchmark, const RouterConfig &config)
     if (iter == 0) {
       tasks.resize(benchmark.nets.size());
       std::iota(tasks.begin(), tasks.end(), 0);
-      std::sort(tasks.begin(), tasks.end(), [&](int a, int b) {
-        return manhattan(benchmark.nets[a].source, benchmark.nets[a].target) >
-               manhattan(benchmark.nets[b].source, benchmark.nets[b].target);
-      });
-      Demand marks = empty_demand(grid);
-      for (const int idx : tasks) {
-        paths[idx] = route_one_astar(grid, benchmark.nets[idx], demand, marks, config, iter);
-        add_path(demand, paths[idx], +1);
-      }
-      continue;
     } else {
       tasks = overflow_nets(grid, demand, paths);
       if (tasks.empty()) {
@@ -457,11 +619,22 @@ Metrics route_sequential(const Benchmark &benchmark, const RouterConfig &config)
       if (paths[idx].routed) {
         add_path(demand, paths[idx], -1);
       }
-      paths[idx] = route_one_astar(grid, benchmark.nets[idx], demand, marks, config, iter);
-      add_path(demand, paths[idx], +1);
+      if (iter == 0) {
+        paths[idx] = route_one_astar(grid, benchmark.nets[idx], demand, marks, config, iter);
+      } else {
+        Path strict_path = route_one_astar_strict(grid, benchmark.nets[idx], demand, marks,
+                                                 config, iter);
+        paths[idx] = strict_path.routed
+                         ? std::move(strict_path)
+                         : route_one_astar(grid, benchmark.nets[idx], demand, marks, config, iter);
+      }
+      if (paths[idx].routed) {
+        add_path(demand, paths[idx], +1);
+      }
     }
   }
 
+  completed_iterations = legalize_paths(benchmark, config, paths, demand, completed_iterations);
   const auto end = std::chrono::steady_clock::now();
   const double ms = std::chrono::duration<double, std::milli>(end - start).count();
   return collect_metrics("seq", benchmark, config, paths, demand, ms, completed_iterations);
@@ -517,7 +690,8 @@ Metrics route_parallel_cpu(const Benchmark &benchmark, const RouterConfig &confi
               break;
             }
             const int idx = tasks[offset + local];
-            new_paths[local] = route_one_astar(grid, benchmark.nets[idx], snapshot, marks, config, iter);
+            new_paths[local] =
+                route_one_astar(grid, benchmark.nets[idx], snapshot, marks, config, iter);
           }
         });
       }
@@ -532,6 +706,7 @@ Metrics route_parallel_cpu(const Benchmark &benchmark, const RouterConfig &confi
     }
   }
 
+  completed_iterations = legalize_paths(benchmark, config, paths, demand, completed_iterations);
   const auto end = std::chrono::steady_clock::now();
   const double ms = std::chrono::duration<double, std::milli>(end - start).count();
   return collect_metrics("cpu_threads", benchmark, config, paths, demand, ms, completed_iterations);
@@ -540,33 +715,33 @@ Metrics route_parallel_cpu(const Benchmark &benchmark, const RouterConfig &confi
 Metrics route_cpu_candidates(const Benchmark &benchmark, const RouterConfig &config) {
   const auto start = std::chrono::steady_clock::now();
   const auto &grid = benchmark.grid;
-  Demand demand = empty_demand(grid);
   std::vector<Path> paths(benchmark.nets.size());
 
   for (int i = 0; i < static_cast<int>(benchmark.nets.size()); ++i) {
     paths[i] = choose_l_shape_candidate(grid, benchmark.nets[i]);
-    add_path(demand, paths[i], +1);
   }
 
-  const auto end = std::chrono::steady_clock::now();
-  const double ms = std::chrono::duration<double, std::milli>(end - start).count();
-  return collect_metrics("candidate_cpu", benchmark, config, paths, demand, ms, 1);
+  const auto after_initial = std::chrono::steady_clock::now();
+  const double initial_ms =
+      std::chrono::duration<double, std::milli>(after_initial - start).count();
+  return detail::legalize_and_collect_metrics("candidate_cpu", benchmark, config, paths, 1,
+                                              initial_ms);
 }
 
 Metrics route_cpu_dogleg_candidates(const Benchmark &benchmark, const RouterConfig &config) {
   const auto start = std::chrono::steady_clock::now();
   const auto &grid = benchmark.grid;
-  Demand demand = empty_demand(grid);
   std::vector<Path> paths(benchmark.nets.size());
 
   for (int i = 0; i < static_cast<int>(benchmark.nets.size()); ++i) {
     paths[i] = choose_dogleg_candidate(grid, benchmark.nets[i]);
-    add_path(demand, paths[i], +1);
   }
 
-  const auto end = std::chrono::steady_clock::now();
-  const double ms = std::chrono::duration<double, std::milli>(end - start).count();
-  return collect_metrics("candidate_cpu_dogleg", benchmark, config, paths, demand, ms, 1);
+  const auto after_initial = std::chrono::steady_clock::now();
+  const double initial_ms =
+      std::chrono::duration<double, std::milli>(after_initial - start).count();
+  return detail::legalize_and_collect_metrics("candidate_cpu_dogleg", benchmark, config, paths, 1,
+                                              initial_ms);
 }
 
 #if !ROUTER_WITH_CUDA

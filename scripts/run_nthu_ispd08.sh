@@ -6,6 +6,7 @@ NTHU_DIR=${NTHU_DIR:-"$ROOT/external/nthu-route"}
 BENCH_DIR=${BENCH_DIR:-"$ROOT/benchmarks/ispd08"}
 RESULT_DIR=${RESULT_DIR:-"$ROOT/results/nthu"}
 JOBS=${JOBS:-$(nproc)}
+PARALLEL_BENCH_JOBS=${PARALLEL_BENCH_JOBS:-1}
 BENCH_PATTERN=${BENCH_PATTERN:-*.gr}
 BENCH_LIST=${BENCH_LIST:-}
 EVALUATOR=${EVALUATOR:-auto}
@@ -37,6 +38,9 @@ if [[ "$NTHU_OPENMP" == "ON" ]]; then
 fi
 
 read -r -a nthu_extra_args <<< "$NTHU_EXTRA_ARGS"
+if ! [[ "$PARALLEL_BENCH_JOBS" =~ ^[0-9]+$ ]] || (( PARALLEL_BENCH_JOBS < 1 )); then
+  PARALLEL_BENCH_JOBS=1
+fi
 
 mkdir -p "$RESULT_DIR" "$BUILD_DIR"
 
@@ -56,7 +60,24 @@ elif [[ ! -x "$BUILD_DIR/NthuRoute" ]]; then
 fi
 
 CSV="$RESULT_DIR/summary.csv"
-echo "router,benchmark,status,seconds,evaluator,total_wirelength,total_overflow,max_overflow,overflowed_nets,overflowed_edges,output" > "$CSV"
+CSV_HEADER="router,benchmark,status,seconds,evaluator,total_wirelength,total_overflow,max_overflow,overflowed_nets,overflowed_edges,output"
+declare -A completed_benches=()
+if [[ "${RESUME_EXISTING:-0}" == 1 && -f "$CSV" ]]; then
+  resume_csv="$CSV.resume.$$"
+  echo "$CSV_HEADER" > "$resume_csv"
+  while IFS=, read -r router benchmark status _rest; do
+    [[ "$router" == "router" ]] && continue
+    if [[ -n "${benchmark:-}" && "$status" == ok ]]; then
+      completed_benches["$benchmark"]=1
+      echo "$router,$benchmark,$status,$_rest" >> "$resume_csv"
+    fi
+  done < "$CSV"
+  mv "$resume_csv" "$CSV"
+else
+  echo "$CSV_HEADER" > "$CSV"
+fi
+ROW_DIR="$RESULT_DIR/.rows"
+mkdir -p "$ROW_DIR"
 
 shopt -s nullglob
 if [[ -n "$BENCH_LIST" ]]; then
@@ -76,37 +97,43 @@ if [[ "${INCLUDE_NTHU_SAMPLE:-0}" == 1 ]]; then
   benches+=( "$NTHU_DIR"/adaptec1.capo70.3d.35.50.90.gr )
 fi
 
-for bench in "${benches[@]}"; do
-  [[ -f "$bench" ]] || continue
+run_one_bench() {
+  local bench=$1
+  local row_file=$2
+  [[ -f "$bench" ]] || return 0
+  local name
   name=$(basename "$bench" .gr)
-  out="$RESULT_DIR/$name.nthu.out"
-  log="$RESULT_DIR/$name.nthu.log"
-  eval_log="$RESULT_DIR/$name.nthu.eval"
-  metrics_json="$RESULT_DIR/$name.nthu.metrics.json"
+  local out="$RESULT_DIR/$name.nthu.out"
+  local log="$RESULT_DIR/$name.nthu.log"
+  local eval_log="$RESULT_DIR/$name.nthu.eval"
+  local metrics_json="$RESULT_DIR/$name.nthu.metrics.json"
   echo "$ROUTER_LABEL $name"
+  local start
   start=$(python3 - <<'PY'
 import time
 print(time.time())
 PY
 )
-  status=ok
+  local status=ok
   (cd "$BUILD_DIR" && ./NthuRoute "${nthu_extra_args[@]}" --input="$bench" --output="$out") > "$log" 2>&1 || status=fail
+  local end
   end=$(python3 - <<'PY'
 import time
 print(time.time())
 PY
 )
+  local seconds
   seconds=$(python3 - "$start" "$end" <<'PY'
 import sys
 print(f"{float(sys.argv[2]) - float(sys.argv[1]):.6f}")
 PY
 )
-  total_wirelength=NA
-  total_overflow=NA
-  max_overflow=NA
-  overflowed_nets=NA
-  overflowed_edges=NA
-  metric_evaluator=NA
+  local total_wirelength=NA
+  local total_overflow=NA
+  local max_overflow=NA
+  local overflowed_nets=NA
+  local overflowed_edges=NA
+  local metric_evaluator=NA
   if [[ "$status" == ok ]]; then
     if python3 "$ROOT/scripts/evaluate_route.py" "$bench" "$out" \
         --evaluator "$EVALUATOR" \
@@ -134,7 +161,35 @@ PY
       status=eval_fail
     fi
   fi
-  echo "$ROUTER_LABEL,$name,$status,$seconds,$metric_evaluator,${total_wirelength:-NA},${total_overflow:-NA},${max_overflow:-NA},${overflowed_nets:-NA},${overflowed_edges:-NA},$out" >> "$CSV"
+  echo "$ROUTER_LABEL,$name,$status,$seconds,$metric_evaluator,${total_wirelength:-NA},${total_overflow:-NA},${max_overflow:-NA},${overflowed_nets:-NA},${overflowed_edges:-NA},$out" > "$row_file"
+}
+
+for bench in "${benches[@]}"; do
+  [[ -f "$bench" ]] || continue
+  name=$(basename "$bench" .gr)
+  row_file="$ROW_DIR/$name.csvrow"
+  if [[ "${completed_benches[$name]:-0}" == 1 ]]; then
+    echo "$ROUTER_LABEL $name (resume skip)"
+    rm -f "$row_file"
+    continue
+  fi
+  rm -f "$row_file"
+  run_one_bench "$bench" "$row_file" &
+  while (( $(jobs -pr | wc -l) >= PARALLEL_BENCH_JOBS )); do
+    sleep 1
+  done
+done
+
+wait
+
+for bench in "${benches[@]}"; do
+  [[ -f "$bench" ]] || continue
+  name=$(basename "$bench" .gr)
+  row_file="$ROW_DIR/$name.csvrow"
+  if [[ -f "$row_file" ]]; then
+    cat "$row_file" >> "$CSV"
+    rm -f "$row_file"
+  fi
 done
 
 echo "wrote $CSV"

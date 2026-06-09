@@ -147,7 +147,7 @@ nets rather than GPU reductions over grid edges.
 Use this newer summary for the final report:
 
 ```text
-docs/methods_and_results_summary.md
+docs/11-early-results-summary.md
 results/method_speedups_summary.csv
 results/cross_validation_checks.csv
 ```

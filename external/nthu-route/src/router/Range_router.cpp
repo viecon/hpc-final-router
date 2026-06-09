@@ -7,14 +7,21 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstdint>
 #include <exception>
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <queue>
 #include <string>
+#include <unordered_set>
 #include <vector>
+
+#ifdef NTHU_ROUTE_OPENMP
+#include <omp.h>
+#endif
 
 #include "../grdb/EdgePlane.h"
 #include "../grdb/RoutingRegion.h"
@@ -186,6 +193,34 @@ int direct_overflow_candidate_limit() {
     return std::max(0, std::atoi(value));
 }
 
+bool parallel_reroute_batches_enabled() {
+    return std::getenv("NTHU_PARALLEL_REROUTE_BATCHES") != nullptr;
+}
+
+bool parallel_reroute_log_enabled() {
+    return std::getenv("NTHU_PARALLEL_REROUTE_LOG") != nullptr;
+}
+
+int parallel_reroute_batch_limit() {
+    const char* value = std::getenv("NTHU_PARALLEL_REROUTE_BATCH_LIMIT");
+    if (value == nullptr || *value == '\0') {
+        return 0;
+    }
+    return std::max(1, std::atoi(value));
+}
+
+int parallel_reroute_max_candidates() {
+    const char* value = std::getenv("NTHU_PARALLEL_REROUTE_MAX_CANDIDATES");
+    if (value == nullptr || *value == '\0') {
+        return 4096;
+    }
+    const int parsed = std::atoi(value);
+    if (parsed <= 0) {
+        return std::numeric_limits<int>::max();
+    }
+    return parsed;
+}
+
 bool profile_enabled() {
     return std::getenv("NTHU_PROFILE") != nullptr;
 }
@@ -241,6 +276,70 @@ bool post_accept_improvement_enabled() {
     return std::getenv("NTHU_POST_ACCEPT_IMPROVEMENT") != nullptr;
 }
 
+bool strict_legal_maze_enabled() {
+    return std::getenv("NTHU_STRICT_LEGAL_MAZE") != nullptr;
+}
+
+bool bounded_length_reroute_enabled() {
+    return std::getenv("NTHU_BOUNDED_LENGTH_REROUTE") != nullptr;
+}
+
+bool bounded_length_post_only_enabled() {
+    return std::getenv("NTHU_BOUNDED_LENGTH_POST_ONLY") != nullptr;
+}
+
+int bounded_length_min_iter() {
+    const char* value = std::getenv("NTHU_BOUNDED_LENGTH_MIN_ITER");
+    if (value == nullptr || *value == '\0') {
+        return -1;
+    }
+    return std::atoi(value);
+}
+
+int bounded_length_extra_edges() {
+    const char* value = std::getenv("NTHU_BOUNDED_LENGTH_EXTRA");
+    if (value == nullptr || *value == '\0') {
+        return 8;
+    }
+    return std::max(0, std::atoi(value));
+}
+
+int bounded_length_original_extra_edges() {
+    const char* value = std::getenv("NTHU_BOUNDED_LENGTH_ORIGINAL_EXTRA");
+    if (value == nullptr || *value == '\0') {
+        return 0;
+    }
+    return std::max(0, std::atoi(value));
+}
+
+double bounded_length_ratio() {
+    const char* value = std::getenv("NTHU_BOUNDED_LENGTH_RATIO");
+    if (value == nullptr || *value == '\0') {
+        return 1.20;
+    }
+    return std::max(1.0, std::atof(value));
+}
+
+bool strict_legal_maze_post_only_enabled() {
+    return std::getenv("NTHU_STRICT_LEGAL_MAZE_POST_ONLY") != nullptr;
+}
+
+int strict_legal_maze_max_area() {
+    const char* value = std::getenv("NTHU_STRICT_LEGAL_MAZE_MAX_AREA");
+    if (value == nullptr || *value == '\0') {
+        return 250000;
+    }
+    return std::max(1, std::atoi(value));
+}
+
+int strict_legal_maze_min_iter() {
+    const char* value = std::getenv("NTHU_STRICT_LEGAL_MAZE_MIN_ITER");
+    if (value == nullptr || *value == '\0') {
+        return -1;
+    }
+    return std::atoi(value);
+}
+
 int post_accept_min_delta() {
     const char* value = std::getenv("NTHU_POST_ACCEPT_MIN_DELTA");
     if (value == nullptr || *value == '\0') {
@@ -280,6 +379,138 @@ int inserted_path_overflow_score(const std::vector<NTHUR::Coordinate_2d>& path,
         overflow_score += std::max(0, static_cast<int>(edge.cur_cap + inc - edge.max_cap));
     }
     return overflow_score;
+}
+
+int path_edges(const std::vector<NTHUR::Coordinate_2d>& path) {
+    return path.empty() ? 0 : static_cast<int>(path.size()) - 1;
+}
+
+int path_manhattan_endpoints(const std::vector<NTHUR::Coordinate_2d>& path) {
+    if (path.size() < 2) {
+        return 0;
+    }
+    const NTHUR::Coordinate_2d& a = path.front();
+    const NTHUR::Coordinate_2d& b = path.back();
+    return std::abs(a.x - b.x) + std::abs(a.y - b.y);
+}
+
+bool bounded_length_phase_enabled(int version, int current_iter) {
+    if (!bounded_length_reroute_enabled()) {
+        return false;
+    }
+    if (bounded_length_post_only_enabled() && version != 3) {
+        return false;
+    }
+    return current_iter >= bounded_length_min_iter();
+}
+
+int bounded_length_limit(const std::vector<NTHUR::Coordinate_2d>& original_path) {
+    const int manhattan = path_manhattan_endpoints(original_path);
+    const int original_edges = path_edges(original_path);
+    const int ratio_limit = static_cast<int>(std::ceil(
+            static_cast<double>(manhattan) * bounded_length_ratio())) +
+            bounded_length_extra_edges();
+    const int original_limit = original_edges + bounded_length_original_extra_edges();
+    return std::max(manhattan, std::max(ratio_limit, original_limit));
+}
+
+bool find_strict_legal_maze_path(const NTHUR::Two_pin_element_2d& two_pin,
+        const NTHUR::Congestion& congestion,
+        const NTHUR::Coordinate_2d& start,
+        const NTHUR::Coordinate_2d& end,
+        std::vector<NTHUR::Coordinate_2d>& path) {
+    const int width = end.x - start.x + 1;
+    const int height = end.y - start.y + 1;
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+    const int max_area = strict_legal_maze_max_area();
+    if (width > max_area / height) {
+        return false;
+    }
+
+    auto in_box = [&](const NTHUR::Coordinate_2d& c) {
+        return c.x >= start.x && c.x <= end.x && c.y >= start.y && c.y <= end.y;
+    };
+    if (!in_box(two_pin.pin1) || !in_box(two_pin.pin2)) {
+        return false;
+    }
+
+    const int area = width * height;
+    auto index_of = [&](const NTHUR::Coordinate_2d& c) {
+        return (c.y - start.y) * width + (c.x - start.x);
+    };
+    auto coordinate_of = [&](int index) {
+        return NTHUR::Coordinate_2d { start.x + (index % width), start.y + (index / width) };
+    };
+
+    const int source = index_of(two_pin.pin1);
+    const int target = index_of(two_pin.pin2);
+    std::vector<double> dist(area, std::numeric_limits<double>::infinity());
+    std::vector<int> parent(area, -1);
+    using QueueItem = std::pair<double, int>;
+    std::priority_queue<QueueItem, std::vector<QueueItem>, std::greater<QueueItem>> queue;
+    dist[source] = 0.0;
+    queue.push({ 0.0, source });
+
+    const std::array<NTHUR::Coordinate_2d, 4> directions {
+            NTHUR::Coordinate_2d { 1, 0 },
+            NTHUR::Coordinate_2d { -1, 0 },
+            NTHUR::Coordinate_2d { 0, 1 },
+            NTHUR::Coordinate_2d { 0, -1 } };
+
+    while (!queue.empty()) {
+        const QueueItem item = queue.top();
+        const double cost = item.first;
+        const int current_index = item.second;
+        queue.pop();
+        if (cost != dist[current_index]) {
+            continue;
+        }
+        if (current_index == target) {
+            break;
+        }
+        const NTHUR::Coordinate_2d current = coordinate_of(current_index);
+        for (const NTHUR::Coordinate_2d& direction : directions) {
+            const NTHUR::Coordinate_2d next { current.x + direction.x, current.y + direction.y };
+            if (!in_box(next)) {
+                continue;
+            }
+            const NTHUR::Edge_2d& edge = congestion.congestionMap2d.edge(current, next);
+            // Reallocation rebuilds each net as a tree; reusing same-net edges can create cycles.
+            if (edge.lookupNet(two_pin.net_id)) {
+                continue;
+            }
+            if (edge.cur_cap + 1.0 > edge.max_cap) {
+                continue;
+            }
+            const int next_index = index_of(next);
+            const double edge_cost = 1.0 + std::max(0.0, edge.cost);
+            const double next_cost = cost + edge_cost;
+            if (next_cost < dist[next_index]) {
+                dist[next_index] = next_cost;
+                parent[next_index] = current_index;
+                queue.push({ next_cost, next_index });
+            }
+        }
+    }
+
+    if (!std::isfinite(dist[target])) {
+        return false;
+    }
+    path.clear();
+    for (int at = target; at != -1; at = parent[at]) {
+        path.push_back(coordinate_of(at));
+        if (at == source) {
+            break;
+        }
+    }
+    if (path.empty() || path.back() != two_pin.pin1) {
+        path.clear();
+        return false;
+    }
+    std::reverse(path.begin(), path.end());
+    return path.size() >= 2;
 }
 
 void sort_twopins_by_overflow_score(std::vector<NTHUR::Two_pin_element_2d*>& twopin_list,
@@ -335,11 +566,65 @@ struct RangeProfile {
     int cuda_maze_area_skips = 0;
     int cuda_maze_score_skips = 0;
     int cuda_maze_call_limit_skips = 0;
+    int parallel_batches = 0;
+    int parallel_batches_with_work = 0;
+    int parallel_inputs = 0;
+    int parallel_serialized_inputs = 0;
+    int parallel_max_batch = 0;
 
     void reset() {
         *this = RangeProfile {};
     }
 };
+
+struct RerouteCandidateBox {
+    NTHUR::Two_pin_element_2d* two_pin;
+    NTHUR::Rectangle box;
+};
+
+bool boxes_overlap(const NTHUR::Rectangle& a, const NTHUR::Rectangle& b) {
+    return !(a.downRight.x < b.upLeft.x || b.downRight.x < a.upLeft.x ||
+            a.downRight.y < b.upLeft.y || b.downRight.y < a.upLeft.y);
+}
+
+void include_point_in_box(NTHUR::Rectangle& box, const NTHUR::Coordinate_2d& point) {
+    box.upLeft.x = std::min(box.upLeft.x, point.x);
+    box.upLeft.y = std::min(box.upLeft.y, point.y);
+    box.downRight.x = std::max(box.downRight.x, point.x);
+    box.downRight.y = std::max(box.downRight.y, point.y);
+}
+
+void include_path_in_box(NTHUR::Rectangle& box, const std::vector<NTHUR::Coordinate_2d>& path) {
+    for (const NTHUR::Coordinate_2d& point : path) {
+        include_point_in_box(box, point);
+    }
+}
+
+void include_box_in_box(NTHUR::Rectangle& box, const NTHUR::Rectangle& other) {
+    include_point_in_box(box, other.upLeft);
+    include_point_in_box(box, other.downRight);
+}
+
+NTHUR::Rectangle reroute_conflict_box(const NTHUR::Two_pin_element_2d& two_pin,
+        const NTHUR::Construct_2d_tree& construct_2d_tree,
+        const NTHUR::Rectangle* net_path_box) {
+    NTHUR::Rectangle box { two_pin.pin1, two_pin.pin2 };
+    include_path_in_box(box, two_pin.path);
+    if (net_path_box != nullptr) {
+        include_box_in_box(box, *net_path_box);
+    }
+
+    const int dogleg_margin = dogleg_sample_step() * dogleg_sample_radius();
+    box.expand(std::max(construct_2d_tree.BOXSIZE_INC, dogleg_margin) + 1);
+
+    NTHUR::Rectangle grid_bound {
+            NTHUR::Coordinate_2d { 0, 0 },
+            NTHUR::Coordinate_2d {
+                    construct_2d_tree.rr_map.get_gridx() - 1,
+                    construct_2d_tree.rr_map.get_gridy() - 1 } };
+    grid_bound.clip(box);
+    return box;
+}
 
 RangeProfile range_profile;
 }
@@ -574,9 +859,16 @@ std::string NTHUR::RangeRouter::printIfBound(const Rectangle& r, const Rectangle
 //If there is no overflowed path by using the two methods above, then remain 
 //the original path.
 void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version) {
+    (void) range_router(two_pin, version, nullptr, nullptr, true);
+}
+
+bool NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version,
+        MonotonicRouting* local_monotonic, Multisource_multisink_mazeroute* local_maze,
+        bool allow_maze) {
     static bool cuda_maze_runtime_disabled = false;
     static int cuda_maze_calls_used = 0;
-    const bool do_profile = profile_enabled();
+    const bool use_local_scratch = local_monotonic != nullptr || local_maze != nullptr;
+    const bool do_profile = profile_enabled() && !use_local_scratch;
     ProfileClock::time_point phase_start;
     if (do_profile) {
         ++range_profile.route_calls;
@@ -603,26 +895,43 @@ void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version) 
                 (score_until_iter >= 0 && (version == 3 || congestion.cur_iter > score_until_iter))) {
             min_reroute_score = 1;
         }
-        const bool cuda_maze_enabled_this_phase =
+        const bool cuda_maze_enabled_this_phase = !use_local_scratch &&
                 (cuda_maze_fastpath_enabled() || cuda_costed_maze_fastpath_enabled()) &&
                 (!cuda_maze_post_only_enabled() || version == 3);
-        if (dogleg_fastpath_enabled() || dump_candidates_enabled() || min_reroute_score > 1 ||
-                cuda_maze_enabled_this_phase || require_post_improvement) {
+        const bool bounded_length_enabled_this_phase =
+                bounded_length_phase_enabled(version, congestion.cur_iter);
+        if (dogleg_fastpath_enabled() || (!use_local_scratch && dump_candidates_enabled()) || min_reroute_score > 1 ||
+                cuda_maze_enabled_this_phase || require_post_improvement ||
+                bounded_length_enabled_this_phase) {
             for (int i = static_cast<int>(two_pin.path.size()) - 2; i >= 0; --i) {
                 const Edge_2d& edge = congestion.congestionMap2d.edge(two_pin.path[i], two_pin.path[i + 1]);
                 old_path_overflow_score += std::max(0, edge.overUsage());
             }
         }
         if (min_reroute_score > 1 && old_path_overflow_score < min_reroute_score) {
-            return;
+            return true;
         }
-        dump_reroute_candidate(two_pin, congestion.cur_iter, old_path_overflow_score);
+        if (!use_local_scratch) {
+            dump_reroute_candidate(two_pin, congestion.cur_iter, old_path_overflow_score);
+        }
         if (do_profile) {
             ++range_profile.actual_reroutes;
         }
+#ifdef NTHU_ROUTE_OPENMP
+#pragma omp atomic update
+#endif
         ++total_twopin;
 
-        construct_2d_tree.NetDirtyBit[two_pin.net_id] = true;
+        if (use_local_scratch) {
+#ifdef NTHU_ROUTE_OPENMP
+#pragma omp critical(nthu_net_dirty)
+#endif
+            {
+                construct_2d_tree.NetDirtyBit[two_pin.net_id] = true;
+            }
+        } else {
+            construct_2d_tree.NetDirtyBit[two_pin.net_id] = true;
+        }
 
         const std::vector<Coordinate_2d> original_path(two_pin.path);
         congestion.update_congestion_map_remove_two_pin_net(two_pin.path, two_pin.net_id);
@@ -668,7 +977,8 @@ void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version) 
             phase_start = after_l_shape;
         }
         if (!find_path_flag) {
-            find_path_flag = monotonicRouter.monotonicRoute(two_pin, bound, bound_path);
+            MonotonicRouting& monotonic_router = local_monotonic != nullptr ? *local_monotonic : monotonicRouter;
+            find_path_flag = monotonic_router.monotonicRoute(two_pin, bound, bound_path);
         }
         if (do_profile) {
             auto after_monotonic = ProfileClock::now();
@@ -693,6 +1003,13 @@ void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version) 
             phase_start = after_new_check;
         }
         if ((!find_path_flag) || new_path_has_overflow) {
+            if (!allow_maze) {
+                two_pin.path = original_path;
+                two_pin.pin1 = two_pin.path.front();
+                two_pin.pin2 = two_pin.path.back();
+                congestion.update_congestion_map_insert_two_pin_net(two_pin);
+                return false;
+            }
             Coordinate_2d start;
             Coordinate_2d end;
 
@@ -796,7 +1113,27 @@ void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version) 
             }
 
             if (!find_path_flag) {
-                find_path_flag = construct_2d_tree.mazeroute_in_range.mm_maze_route_p(two_pin, bound.cost, bound.distance, bound.via_num, start, end, version);
+                const bool strict_legal_enabled_this_phase = strict_legal_maze_enabled() &&
+                        (!strict_legal_maze_post_only_enabled() || version == 3) &&
+                        congestion.cur_iter >= strict_legal_maze_min_iter();
+                if (strict_legal_enabled_this_phase) {
+                    std::vector<Coordinate_2d> legal_path;
+                    if (find_strict_legal_maze_path(two_pin, congestion, start, end, legal_path)) {
+                        two_pin.path = std::move(legal_path);
+                        two_pin.pin1 = two_pin.path.front();
+                        two_pin.pin2 = two_pin.path.back();
+                        find_path_flag = true;
+                    }
+                }
+            }
+
+            if (!find_path_flag) {
+                Multisource_multisink_mazeroute& maze_router =
+                        local_maze != nullptr ? *local_maze : construct_2d_tree.mazeroute_in_range;
+                const int max_path_edges =
+                        bounded_length_enabled_this_phase ? bounded_length_limit(original_path) : -1;
+                find_path_flag = maze_router.mm_maze_route_p(two_pin, bound.cost, bound.distance,
+                        bound.via_num, start, end, version, max_path_edges);
             }
             if (do_profile) {
                 auto after_maze = ProfileClock::now();
@@ -819,6 +1156,21 @@ void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version) 
             }
         }
 
+        if (find_path_flag && bounded_length_enabled_this_phase) {
+            const int new_edges = path_edges(two_pin.path);
+            const int max_edges = bounded_length_limit(original_path);
+            if (new_edges > max_edges) {
+                if (parallel_reroute_log_enabled() || profile_enabled()) {
+                    log_sp->info("bounded-length reroute reject: net={} version={} iter={} old_edges={} new_edges={} max_edges={} old_overflow={}",
+                            two_pin.net_id, version, congestion.cur_iter, path_edges(original_path),
+                            new_edges, max_edges, old_path_overflow_score);
+                }
+                two_pin.path = original_path;
+                two_pin.pin1 = two_pin.path.front();
+                two_pin.pin2 = two_pin.path.back();
+            }
+        }
+
         congestion.update_congestion_map_insert_two_pin_net(two_pin);
         if (do_profile) {
             auto after_insert = ProfileClock::now();
@@ -826,6 +1178,7 @@ void NTHUR::RangeRouter::range_router(Two_pin_element_2d& two_pin, int version) 
         }
 
     }
+    return true;
 }
 
 bool NTHUR::RangeRouter::try_l_shape_fastpath(Two_pin_element_2d& two_pin) {
@@ -1052,6 +1405,181 @@ bool NTHUR::RangeRouter::try_dogleg_fastpath(Two_pin_element_2d& two_pin) {
     return true;
 }
 
+void NTHUR::RangeRouter::route_twopin_candidates(std::vector<Two_pin_element_2d*>& twopin_list, int version) {
+#ifdef NTHU_ROUTE_OPENMP
+    if (parallel_reroute_batches_enabled() && twopin_list.size() > 1) {
+        const bool do_profile = profile_enabled();
+        const auto reroute_start = ProfileClock::now();
+        std::vector<Two_pin_element_2d*> overflow_twopins;
+        overflow_twopins.reserve(twopin_list.size());
+        for (Two_pin_element_2d* two_pin : twopin_list) {
+            if (!congestion.check_path_no_overflow(two_pin->path, two_pin->net_id, false)) {
+                overflow_twopins.push_back(two_pin);
+            }
+        }
+        if (overflow_twopins.empty()) {
+            if (do_profile) {
+                range_profile.reroute_ms += profile_ms(reroute_start, ProfileClock::now());
+            }
+            return;
+        }
+        const int max_parallel_candidates = parallel_reroute_max_candidates();
+        const int parallel_count = std::min(static_cast<int>(overflow_twopins.size()), max_parallel_candidates);
+        std::vector<Two_pin_element_2d*> serial_tail;
+        if (parallel_count < static_cast<int>(overflow_twopins.size())) {
+            serial_tail.assign(overflow_twopins.begin() + parallel_count, overflow_twopins.end());
+        }
+
+        std::unordered_map<int, Rectangle> net_path_boxes;
+        net_path_boxes.reserve(construct_2d_tree.two_pin_list.size());
+        for (const Two_pin_element_2d& net_two_pin : construct_2d_tree.two_pin_list) {
+            auto inserted = net_path_boxes.emplace(net_two_pin.net_id,
+                    Rectangle { net_two_pin.pin1, net_two_pin.pin2 });
+            include_point_in_box(inserted.first->second, net_two_pin.pin1);
+            include_point_in_box(inserted.first->second, net_two_pin.pin2);
+            include_path_in_box(inserted.first->second, net_two_pin.path);
+        }
+
+        std::vector<RerouteCandidateBox> remaining;
+        remaining.reserve(parallel_count);
+        for (int i = 0; i < parallel_count; ++i) {
+            Two_pin_element_2d* two_pin = overflow_twopins[i];
+            auto net_box = net_path_boxes.find(two_pin->net_id);
+            remaining.push_back(RerouteCandidateBox {
+                    two_pin,
+                    reroute_conflict_box(*two_pin, construct_2d_tree,
+                            net_box != net_path_boxes.end() ? &net_box->second : nullptr) });
+        }
+
+        const int max_threads = std::max(1, omp_get_max_threads());
+        const int configured_limit = parallel_reroute_batch_limit();
+        const int batch_limit = configured_limit > 0 ? std::min(configured_limit, max_threads) : max_threads;
+
+        int batches = 0;
+        int parallel_batches = 0;
+        int routed_inputs = 0;
+        int serialized_inputs = 0;
+        int max_batch_size = 0;
+        std::vector<Two_pin_element_2d*> serial_fallback;
+        serial_fallback.reserve(overflow_twopins.size());
+
+        std::vector<RerouteCandidateBox> batch;
+        std::vector<RerouteCandidateBox> next_remaining;
+        batch.reserve(batch_limit);
+        next_remaining.reserve(remaining.size());
+        bool done = false;
+        int current_batch_size = 0;
+
+        const int workers = std::min(batch_limit, static_cast<int>(remaining.size()));
+#pragma omp parallel num_threads(workers)
+        {
+            MonotonicRouting local_monotonic(congestion, monotonic_enable_flag);
+            while (true) {
+#pragma omp single
+                {
+                    batch.clear();
+                    next_remaining.clear();
+                    std::unordered_set<int> batch_net_ids;
+                    done = remaining.empty();
+                    if (!done) {
+                        for (const RerouteCandidateBox& candidate : remaining) {
+                            bool conflict = batch_net_ids.find(candidate.two_pin->net_id) != batch_net_ids.end();
+                            if (!conflict) {
+                                for (const RerouteCandidateBox& selected : batch) {
+                                    if (boxes_overlap(candidate.box, selected.box)) {
+                                        conflict = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!conflict && static_cast<int>(batch.size()) < batch_limit) {
+                                batch.push_back(candidate);
+                                batch_net_ids.insert(candidate.two_pin->net_id);
+                            } else {
+                                next_remaining.push_back(candidate);
+                            }
+                        }
+
+                        if (batch.empty()) {
+                            batch.push_back(next_remaining.back());
+                            next_remaining.pop_back();
+                        }
+
+                        ++batches;
+                        current_batch_size = static_cast<int>(batch.size());
+                        routed_inputs += current_batch_size;
+                        max_batch_size = std::max(max_batch_size, current_batch_size);
+                        if (current_batch_size == 1) {
+                            ++serialized_inputs;
+                        } else {
+                            ++parallel_batches;
+                        }
+                        remaining.swap(next_remaining);
+                    }
+                }
+                if (done) {
+                    break;
+                }
+
+                if (current_batch_size == 1) {
+#pragma omp single
+                    {
+                        range_router(*batch.front().two_pin, version);
+                    }
+                } else {
+#pragma omp for schedule(dynamic, 1)
+                    for (int i = 0; i < current_batch_size; ++i) {
+                        if (!range_router(*batch[i].two_pin, version, &local_monotonic, nullptr, false)) {
+#pragma omp critical(nthu_serial_fallback)
+                            {
+                                serial_fallback.push_back(batch[i].two_pin);
+                            }
+                        }
+                    }
+                }
+#pragma omp barrier
+            }
+        }
+
+        if (!serial_fallback.empty()) {
+            for (Two_pin_element_2d* two_pin : serial_fallback) {
+                range_router(*two_pin, version);
+            }
+        }
+        if (!serial_tail.empty()) {
+            for (Two_pin_element_2d* two_pin : serial_tail) {
+                range_router(*two_pin, version);
+            }
+        }
+
+        if (do_profile) {
+            range_profile.reroute_ms += profile_ms(reroute_start, ProfileClock::now());
+            range_profile.parallel_batches += batches;
+            range_profile.parallel_batches_with_work += parallel_batches;
+            range_profile.parallel_inputs += routed_inputs;
+            range_profile.parallel_serialized_inputs += serialized_inputs;
+            range_profile.parallel_max_batch = std::max(range_profile.parallel_max_batch, max_batch_size);
+        }
+        if (do_profile || parallel_reroute_log_enabled()) {
+            log_sp->info("parallel reroute batches candidates={} overflow_candidates={} parallel_candidates={} serial_tail={} batches={} parallel_batches={} serialized_inputs={} serial_fallback={} max_batch={} batch_limit={}",
+                    twopin_list.size(), overflow_twopins.size(), parallel_count, serial_tail.size(),
+                    batches, parallel_batches, serialized_inputs, serial_fallback.size(),
+                    max_batch_size, batch_limit);
+        }
+        return;
+    }
+#endif
+
+    const bool do_profile = profile_enabled();
+    for (Two_pin_element_2d* two_pin : twopin_list) {
+        auto reroute_start = ProfileClock::now();
+        range_router(*two_pin, version);
+        if (do_profile) {
+            range_profile.reroute_ms += profile_ms(reroute_start, ProfileClock::now());
+        }
+    }
+}
+
 void NTHUR::RangeRouter::prepare_cuda_dogleg_choices(const std::vector<Two_pin_element_2d*>& twopin_list) {
     cuda_dogleg_choices.clear();
     if (!cuda_dogleg_preselect_enabled() || !dogleg_fastpath_enabled() || twopin_list.empty() ||
@@ -1254,17 +1782,11 @@ void NTHUR::RangeRouter::specify_all_range(boost::multi_array<Point_fc, 2>& grid
             range_profile.candidates += candidates.size();
         }
         prepare_cuda_dogleg_choices(twopin_list);
-        for (Two_pin_element_2d * two_pin : twopin_list) {
-            auto reroute_start = ProfileClock::now();
-            range_router(*two_pin, 2);
-            if (do_profile) {
-                range_profile.reroute_ms += profile_ms(reroute_start, ProfileClock::now());
-            }
-        }
+        route_twopin_candidates(twopin_list, 2);
 
         construct_2d_tree.mazeroute_in_range.clear_net_tree();
         if (do_profile) {
-            log_sp->info("profile range direct candidates={} route_calls={} actual_reroutes={} l_shape_success={} cuda_batches={} cuda_skipped_small_batches={} cuda_inputs={} cuda_valid_choices={} cuda_maze_attempts={} cuda_maze_success={} cuda_maze_area_skips={} cuda_maze_score_skips={} cuda_maze_call_limit_skips={} scan_ms={:.3f} sort_ms={:.3f} cuda_prepare_ms={:.3f} cuda_maze_ms={:.3f} reroute_ms={:.3f} check_old_ms={:.3f} remove_ms={:.3f} l_shape_ms={:.3f} monotonic_ms={:.3f} check_new_ms={:.3f} maze_ms={:.3f} insert_ms={:.3f}",
+            log_sp->info("profile range direct candidates={} route_calls={} actual_reroutes={} l_shape_success={} cuda_batches={} cuda_skipped_small_batches={} cuda_inputs={} cuda_valid_choices={} cuda_maze_attempts={} cuda_maze_success={} cuda_maze_area_skips={} cuda_maze_score_skips={} cuda_maze_call_limit_skips={} parallel_batches={} parallel_work_batches={} parallel_inputs={} parallel_serialized_inputs={} parallel_max_batch={} scan_ms={:.3f} sort_ms={:.3f} cuda_prepare_ms={:.3f} cuda_maze_ms={:.3f} reroute_ms={:.3f} check_old_ms={:.3f} remove_ms={:.3f} l_shape_ms={:.3f} monotonic_ms={:.3f} check_new_ms={:.3f} maze_ms={:.3f} insert_ms={:.3f}",
                     range_profile.candidates, range_profile.route_calls, range_profile.actual_reroutes,
                     range_profile.l_shape_success, range_profile.cuda_batches,
                     range_profile.cuda_skipped_small_batches, range_profile.cuda_inputs,
@@ -1272,6 +1794,9 @@ void NTHUR::RangeRouter::specify_all_range(boost::multi_array<Point_fc, 2>& grid
                     range_profile.cuda_maze_attempts, range_profile.cuda_maze_success,
                     range_profile.cuda_maze_area_skips, range_profile.cuda_maze_score_skips,
                     range_profile.cuda_maze_call_limit_skips,
+                    range_profile.parallel_batches, range_profile.parallel_batches_with_work,
+                    range_profile.parallel_inputs, range_profile.parallel_serialized_inputs,
+                    range_profile.parallel_max_batch,
                     range_profile.direct_candidate_scan_ms, range_profile.candidate_sort_ms,
                     range_profile.cuda_prepare_ms, range_profile.cuda_maze_ms,
                     range_profile.reroute_ms, range_profile.check_old_path_ms, range_profile.remove_ms,
@@ -1336,18 +1861,10 @@ void NTHUR::RangeRouter::specify_all_range(boost::multi_array<Point_fc, 2>& grid
         }
 
         prepare_cuda_dogleg_choices(twopin_list);
-        for (Two_pin_element_2d * two_pin : twopin_list) {
-
-            auto reroute_start = ProfileClock::now();
-            range_router(*two_pin, 2);
-            if (do_profile) {
-                range_profile.reroute_ms += profile_ms(reroute_start, ProfileClock::now());
-            }
-
-        }
+        route_twopin_candidates(twopin_list, 2);
     }
 
-    if (!skip_remainder_candidates_enabled()) {
+    if (!skip_remainder_candidates_enabled() || construct_2d_tree.force_route_remainder) {
         twopin_list.clear();
         int length = construct_2d_tree.two_pin_list.size();
         for (int i = 0; i < length; ++i) {
@@ -1367,21 +1884,19 @@ void NTHUR::RangeRouter::specify_all_range(boost::multi_array<Point_fc, 2>& grid
         }
         prepare_cuda_dogleg_choices(twopin_list);
         const int min_remainder_box = remainder_min_box_size();
+        std::vector<Two_pin_element_2d*> remainder_twopins;
         for (int i = 0; i < (int) twopin_list.size(); ++i) {
             if (twopin_list[i]->boxSize() < min_remainder_box) {
                 break;
             }
-            auto reroute_start = ProfileClock::now();
-            range_router(*twopin_list[i], 2);
-            if (do_profile) {
-                range_profile.reroute_ms += profile_ms(reroute_start, ProfileClock::now());
-            }
+            remainder_twopins.push_back(twopin_list[i]);
         }
+        route_twopin_candidates(remainder_twopins, 2);
     }
 
     construct_2d_tree.mazeroute_in_range.clear_net_tree();
     if (do_profile) {
-        log_sp->info("profile range normal ranges={} candidates={} route_calls={} actual_reroutes={} l_shape_success={} cuda_batches={} cuda_skipped_small_batches={} cuda_inputs={} cuda_valid_choices={} cuda_maze_attempts={} cuda_maze_success={} cuda_maze_area_skips={} cuda_maze_score_skips={} cuda_maze_call_limit_skips={} interval_sort_ms={:.3f} expand_ms={:.3f} query_ms={:.3f} candidate_sort_ms={:.3f} cuda_prepare_ms={:.3f} cuda_maze_ms={:.3f} reroute_ms={:.3f} check_old_ms={:.3f} remove_ms={:.3f} l_shape_ms={:.3f} monotonic_ms={:.3f} check_new_ms={:.3f} maze_ms={:.3f} insert_ms={:.3f}",
+        log_sp->info("profile range normal ranges={} candidates={} route_calls={} actual_reroutes={} l_shape_success={} cuda_batches={} cuda_skipped_small_batches={} cuda_inputs={} cuda_valid_choices={} cuda_maze_attempts={} cuda_maze_success={} cuda_maze_area_skips={} cuda_maze_score_skips={} cuda_maze_call_limit_skips={} parallel_batches={} parallel_work_batches={} parallel_inputs={} parallel_serialized_inputs={} parallel_max_batch={} interval_sort_ms={:.3f} expand_ms={:.3f} query_ms={:.3f} candidate_sort_ms={:.3f} cuda_prepare_ms={:.3f} cuda_maze_ms={:.3f} reroute_ms={:.3f} check_old_ms={:.3f} remove_ms={:.3f} l_shape_ms={:.3f} monotonic_ms={:.3f} check_new_ms={:.3f} maze_ms={:.3f} insert_ms={:.3f}",
                 range_profile.ranges, range_profile.candidates, range_profile.route_calls, range_profile.actual_reroutes,
                 range_profile.l_shape_success, range_profile.cuda_batches,
                 range_profile.cuda_skipped_small_batches, range_profile.cuda_inputs,
@@ -1389,6 +1904,9 @@ void NTHUR::RangeRouter::specify_all_range(boost::multi_array<Point_fc, 2>& grid
                 range_profile.cuda_maze_attempts, range_profile.cuda_maze_success,
                 range_profile.cuda_maze_area_skips, range_profile.cuda_maze_score_skips,
                 range_profile.cuda_maze_call_limit_skips,
+                range_profile.parallel_batches, range_profile.parallel_batches_with_work,
+                range_profile.parallel_inputs, range_profile.parallel_serialized_inputs,
+                range_profile.parallel_max_batch,
                 range_profile.interval_sort_ms, range_profile.expand_ms, range_profile.query_ms,
                 range_profile.candidate_sort_ms, range_profile.cuda_prepare_ms,
                 range_profile.cuda_maze_ms, range_profile.reroute_ms,
@@ -1403,7 +1921,9 @@ NTHUR::RangeRouter::RangeRouter(Construct_2d_tree& construct2dTree, Congestion& 
 
         construct_2d_tree { construct2dTree }, //
         congestion { congestion }, //
-        colorMap { boost::extents[congestion.congestionMap2d.getXSize()][congestion.congestionMap2d.getYSize()] }, monotonicRouter { congestion, monotonic_enable } {
+        colorMap { boost::extents[congestion.congestionMap2d.getXSize()][congestion.congestionMap2d.getYSize()] },
+        monotonicRouter { congestion, monotonic_enable },
+        monotonic_enable_flag { monotonic_enable } {
     log_sp = spdlog::get("NTHUR");
 
 }

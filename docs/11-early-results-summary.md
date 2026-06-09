@@ -17,7 +17,7 @@ switching routers.
 
 The disk-quota cleanup may have removed some raw per-run directories, logs, and
 route outputs. The final aggregate evidence is still preserved in the selected
-CSV files under `results/` and in `docs/final_experiment_report.md`.
+CSV files under `results/` and in `10-early-source-strategy-report.md`.
 
 The only currently verified `5x+` legal results are **cross-router NCTU-GR**
 comparisons:
