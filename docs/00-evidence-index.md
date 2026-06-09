@@ -30,6 +30,7 @@ The experiment branches were not merged into `main`; only their `docs/` and
 | `experiment-proposal-reroute-v7` | Proposal-only parallel reroute, adaptive rounds, rejected global-commit gate, and current v7 smoke result. |
 | `experiment-transactional-virtual-ripup` | Transactional virtual-ripup attempt and failure analysis. |
 | `experiment-two-stage-parallel-reroute` | Two-stage/wave parallel reroute experiment, legal7 result, and scoring policy. |
+| `experiment-v8-aggressive-parallel` | Latest aggressive v8 parallel/self-ripup proposal experiments through v8.76, including legal failures and tail-repair analysis. |
 | `vm-fastest-benchmark-guard` | Main performance baseline, quality guard, and presentation material. |
 
 ## Scoring Convention
